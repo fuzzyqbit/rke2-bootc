@@ -1,0 +1,31 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG RKE2_VERSION
+ARG SITE_ENV
+ARG RANCHER_RPM_BASEURL=https://rpm.rancher.io
+ARG RKE2_CHANNEL=stable
+ARG EL_MAJOR=9
+
+RUN dnf -y install open-vm-tools cloud-init cloud-utils-growpart chrony sudo \
+      python3 python3-libselinux python3-dnf \
+ && (dnf -y remove firewalld || true)
+
+RUN --mount=type=bind,source=node/scripts,target=/run/build \
+    RKE2_VERSION="${RKE2_VERSION}" SITE_ENV="${SITE_ENV}" RANCHER_RPM_BASEURL="${RANCHER_RPM_BASEURL}" \
+    RKE2_CHANNEL="${RKE2_CHANNEL}" EL_MAJOR="${EL_MAJOR}" /run/build/install-rke2.sh
+
+COPY node/rootfs/ /
+RUN chmod 0440 /etc/sudoers.d/10-wheel-nopasswd \
+ && chmod 0755 /usr/sbin/rke2-node-generalize /usr/libexec/rke2-node/growroot
+
+RUN --mount=type=bind,source=node/scripts,target=/run/build \
+    --mount=type=bind,source=site,target=/run/site \
+    /run/build/apply-site.sh /run/site "${SITE_ENV}"
+
+RUN systemctl enable vmtoolsd.service sshd.service chronyd.service rke2-node-growroot.service \
+ && for u in cloud-init-local cloud-init cloud-init-network cloud-config cloud-final; do \
+      if [ -e "/usr/lib/systemd/system/$u.service" ]; then systemctl enable "$u.service"; fi; done \
+ && systemctl mask bootc-fetch-apply-updates.timer bootc-generic-growpart.service
+
+RUN dnf clean all && rm -rf /var/cache/* /var/log/* /var/lib/dnf
+RUN bootc container lint

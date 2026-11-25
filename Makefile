@@ -4,7 +4,24 @@ CONTAINER_TOOL ?= podman
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: venv test lint rocky-base rocky-base-push
+.PHONY: venv test lint rocky-base rocky-base-push node push print-ref
+
+ENV ?= dev
+NEEDS_BUILD := $(filter node push print-ref vmdk,$(MAKECMDGOALS))
+ifneq ($(NEEDS_BUILD),)
+ifeq ($(ENV),dev)
+BASE_IMAGE := $(ROCKY_BASE_IMAGE)
+else ifeq ($(ENV),prod)
+BASE_IMAGE := $(RHEL_BASE_IMAGE)
+else
+$(error ENV must be dev or prod, got '$(ENV)')
+endif
+ifndef BUILD
+$(error BUILD is required, e.g. make $(firstword $(NEEDS_BUILD)) ENV=$(ENV) BUILD=1)
+endif
+RKE2_TAG := $(shell node/scripts/rke2-version.sh tag $(RKE2_VERSION))
+NODE_REF = $(REGISTRY)/rke2-node-$(ENV):$(RKE2_TAG).$(BUILD)
+endif
 
 venv: $(BIN)/pytest
 
@@ -37,3 +54,15 @@ rocky-base:
 
 rocky-base-push:
 	$(CONTAINER_TOOL) push $(ROCKY_BASE_IMAGE)
+
+node:
+	$(CONTAINER_TOOL) build -f node/Containerfile -t $(NODE_REF) \
+	  --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg RKE2_VERSION=$(RKE2_VERSION) \
+	  --build-arg SITE_ENV=$(ENV) --build-arg RANCHER_RPM_BASEURL=$(RANCHER_RPM_BASEURL) \
+	  --build-arg RKE2_CHANNEL=$(RKE2_CHANNEL) --build-arg EL_MAJOR=$(EL_MAJOR) .
+
+push:
+	$(CONTAINER_TOOL) push $(NODE_REF)
+
+print-ref:
+	@echo $(NODE_REF)
