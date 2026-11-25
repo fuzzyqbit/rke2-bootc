@@ -1,0 +1,92 @@
+# Move a running cluster to a new node image, one node at a time.
+# Usage: ansible-playbook -i <inventory> ansible/rolling-update.yml -e target_image=<registry/repo:tag>
+- name: Preflight checks
+  hosts: rke2_servers:rke2_agents
+  become: true
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  tasks:
+    - name: Require target_image
+      ansible.builtin.assert:
+        that: target_image is defined
+        fail_msg: "target_image is required, for example -e target_image=registry.example.com/platform/rke2-node:v1.34.3-rke2r1.7"
+        quiet: true
+
+    - name: Require an explicit, non-moving tag
+      ansible.builtin.assert:
+        that:
+          - "':' in (target_image | string).split('/')[-1]"
+          - "(target_image | string).split(':')[-1] != 'latest'"
+        fail_msg: "target_image must contain a tag and the tag must not be latest: {{ target_image }}"
+        quiet: true
+
+    - name: Check for an ostree booted system
+      ansible.builtin.stat:
+        path: /run/ostree-booted
+      register: preflight_ostree
+
+    - name: Read bootc status
+      ansible.builtin.command: bootc status --format=json
+      register: preflight_bootc
+      changed_when: false
+      failed_when: false
+
+    - name: Gather local facts
+      ansible.builtin.setup:
+        gather_subset: local
+        filter: ansible_local
+
+    - name: Require a bootc node built from our image
+      ansible.builtin.assert:
+        that:
+          - preflight_ostree.stat.exists
+          - preflight_bootc.rc == 0
+          - ansible_local.rke2_image.rke2_version is defined
+        fail_msg: >-
+          {{ inventory_hostname }} is not a bootc node built from the RKE2 node image
+          (no /run/ostree-booted, bootc status failed, or rke2_image fact missing)
+        quiet: true
+
+    - name: Show image RKE2 version
+      ansible.builtin.debug:
+        msg: "image RKE2 version {{ ansible_local.rke2_image.rke2_version }}, rke2_install_version {{ rke2_install_version }}"
+      when: rke2_install_version is defined
+
+    - name: Require at least one server
+      ansible.builtin.assert:
+        that: groups['rke2_servers'] | length >= 1
+        fail_msg: "group rke2_servers is empty"
+        quiet: true
+
+- name: Update control plane nodes
+  hosts: rke2_servers
+  become: true
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  serial: 1
+  vars: &update_vars
+    agent_batch: 1
+    drain_timeout: 600
+    ready_timeout: 600
+    k8s_node_name: "{{ ansible_facts.nodename | lower }}"
+    kubectl: /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
+    update_marker: rke2-bootc.io/update-in-progress
+    needs_update: "{{ (bootc_status.stdout | from_json).status.booted.image.image.image != target_image }}"
+  tasks:
+    - name: Update node
+      ansible.builtin.include_tasks: tasks/update-node.yml
+      vars:
+        is_server: true
+
+- name: Update worker nodes
+  hosts: rke2_agents
+  become: true
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  serial: "{{ agent_batch }}"
+  vars: *update_vars
+  tasks:
+    - name: Update node
+      ansible.builtin.include_tasks: tasks/update-node.yml
+      vars:
+        is_server: false

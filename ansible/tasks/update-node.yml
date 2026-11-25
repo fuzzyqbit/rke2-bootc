@@ -1,0 +1,88 @@
+# Updates one node. Expects is_server, target_image and the play variables of rolling-update.yml.
+- name: Read bootc status
+  ansible.builtin.command: bootc status --format=json
+  register: bootc_status
+  changed_when: false
+
+- name: Choose kubectl host
+  ansible.builtin.set_fact:
+    kube_host: "{{ (groups['rke2_servers'] | difference([inventory_hostname]) + [inventory_hostname]) | first }}"
+
+- name: Read update marker
+  ansible.builtin.command: >-
+    {{ kubectl }} get node {{ k8s_node_name }}
+    -o jsonpath='{.metadata.annotations.{{ update_marker | replace('.', '\.') }}}'
+  delegate_to: "{{ kube_host }}"
+  register: node_marker
+  changed_when: false
+
+- name: Write registry credentials
+  ansible.builtin.copy:
+    content: "{{ registry_auth_json }}"
+    dest: /etc/ostree/auth.json
+    owner: root
+    group: root
+    mode: "0600"
+  when: registry_auth_json is defined
+  no_log: true
+
+- name: Stage target image
+  ansible.builtin.command: "bootc switch {{ target_image }}"
+  changed_when: true
+  when: needs_update | bool
+
+- name: Mark and cordon node
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - "{{ kubectl }} annotate node {{ k8s_node_name }} {{ update_marker }}={{ target_image }} --overwrite"
+    - "{{ kubectl }} cordon {{ k8s_node_name }}"
+  delegate_to: "{{ kube_host }}"
+  changed_when: true
+  when: needs_update | bool
+
+- name: Drain node
+  ansible.builtin.command: >-
+    {{ kubectl }} drain {{ k8s_node_name }} --ignore-daemonsets --delete-emptydir-data --timeout={{ drain_timeout }}s
+  delegate_to: "{{ kube_host }}"
+  changed_when: true
+  when: needs_update | bool
+
+- name: Reboot into new image
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+  when: needs_update | bool
+
+- name: Wait for node Ready
+  ansible.builtin.command: "{{ kubectl }} wait --for=condition=Ready node/{{ k8s_node_name }} --timeout={{ ready_timeout }}s"
+  delegate_to: "{{ kube_host }}"
+  register: node_ready
+  until: node_ready.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  when: needs_update | bool or (node_marker.stdout | trim | length > 0)
+
+- name: Wait for API server and etcd
+  ansible.builtin.command: "{{ kubectl }} get --raw /readyz"
+  register: api_ready
+  until: api_ready.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  when: is_server | bool and (needs_update | bool or (node_marker.stdout | trim | length > 0))
+
+- name: Verify booted image
+  ansible.builtin.command: bootc status --format=json
+  register: bootc_after
+  changed_when: false
+  failed_when: (bootc_after.stdout | from_json).status.booted.image.image.image != target_image
+  when: needs_update | bool or (node_marker.stdout | trim | length > 0)
+
+- name: Uncordon and clear marker
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - "{{ kubectl }} uncordon {{ k8s_node_name }}"
+    - "{{ kubectl }} annotate node {{ k8s_node_name }} {{ update_marker }}-"
+  delegate_to: "{{ kube_host }}"
+  changed_when: true
+  when: needs_update | bool or (node_marker.stdout | trim | length > 0)
