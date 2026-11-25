@@ -14,7 +14,8 @@ fi
 case "$field" in
   rpm)
     v="${version#v}"
-    echo "${v/+/'~'}"
+    tilde='~'
+    echo "${v/+/$tilde}"
     ;;
   majmin)
     v="${version#v}"
