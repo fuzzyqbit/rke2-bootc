@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Reset this VM's identity so it can be turned into a vCenter template.
+# Usage: rke2-node-generalize [--no-poweroff]
+# GENERALIZE_ROOT prefixes every path touched (used by tests).
+set -euo pipefail
+shopt -s nullglob
+
+poweroff=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-poweroff) poweroff=0 ;;
+    *) echo "usage: rke2-node-generalize [--no-poweroff]" >&2; exit 2 ;;
+  esac
+done
+
+ROOT="${GENERALIZE_ROOT:-}"
+
+if [ -z "$ROOT" ] && [ "$(id -u)" -ne 0 ]; then
+  echo "must run as root" >&2
+  exit 1
+fi
+
+# Refuse before changing anything: a node that has run RKE2 must not become a template.
+if [ -e "$ROOT/var/lib/rancher/rke2/agent" ] || [ -e "$ROOT/var/lib/rancher/rke2/server" ]; then
+  echo "refusing: this node has already run RKE2" >&2
+  exit 1
+fi
+
+cloud-init clean --logs
+
+: > "$ROOT/etc/machine-id"
+rm -f "$ROOT/var/lib/dbus/machine-id" \
+      "$ROOT"/etc/ssh/ssh_host_* \
+      "$ROOT/var/lib/systemd/random-seed" \
+      "$ROOT"/etc/NetworkManager/system-connections/* \
+      "$ROOT"/var/lib/NetworkManager/*.lease \
+      "$ROOT/root/.bash_history" \
+      "$ROOT"/var/home/*/.bash_history
+
+journalctl --rotate
+journalctl --vacuum-time=1s
+
+if [ "$poweroff" -eq 1 ]; then
+  systemctl poweroff
+fi
