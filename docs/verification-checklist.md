@@ -40,6 +40,11 @@ Build:
 sudo make rocky-base
 ```
 
+`make rocky-base` runs `podman build` with the privileges that
+`build-rootfs` needs inside the build (it runs rpm-ostree and bubblewrap):
+`--cap-add=all --security-opt=label=type:container_runtime_t --device /dev/fuse`,
+plus `--no-cache --pull=newer`. `make -n rocky-base` shows the full command.
+
 Inspect the built image:
 
 ```bash
@@ -123,15 +128,9 @@ the failing command and its full output. In particular:
   exist only in CentOS (for example `centos-*` release or repository packages),
   stop and report: the manifest needs a Rocky variant, which is a design
   decision.
-- If `build-rootfs` fails with a permission, namespace or mount error, try the
-  build once by hand with the extra privileges the bootc base-image
-  documentation uses, and report the result either way (`make rocky-base` does
-  not pass them):
-
-  ```bash
-  sudo podman build --cap-add=all --security-opt=label=type:container_runtime_t --device /dev/fuse -f base/rocky/Containerfile -t "$ROCKY_BASE_IMAGE" --build-arg ROCKY_MIRROR="$ROCKY_MIRROR" --build-arg EL_MAJOR="$EL_MAJOR" .
-  ```
-
+- If `build-rootfs` fails with a permission, namespace or mount error even
+  with those privileges, stop and report the full output, the podman version
+  and whether SELinux is enforcing on the build host.
 - If the image builds but `rpm -q rocky-release` fails or `dnf repolist` shows
   no Rocky repositories, stop and report: the base image cannot install
   packages, and the node build (which runs `dnf install`) will fail.
@@ -154,8 +153,31 @@ Make an inventory with that one clone in `rke2_servers` and no agents, and
 `rke2_install_version` equal to `RKE2_VERSION` in `versions.env`:
 
 ```bash
+mkdir -p ~/inventories
+```
+
+```bash
 cp -r ansible/inventory.example ~/inventories/exp2
 ```
+
+Replace `~/inventories/exp2/hosts.yml` with this content, using the clone's
+address (from `govc vm.ip rke2-exp2`) or its DNS name:
+
+```yaml
+all:
+  children:
+    rke2_servers:
+      hosts:
+        rke2-exp2:
+          ansible_host: 192.0.2.22
+    rke2_agents:
+      hosts: {}
+```
+
+Check `rke2_install_version` in `~/inventories/exp2/group_vars/all.yml`. The
+commands below, and the later items that say `<inventory>`, use this
+inventory (`~/inventories/exp2/hosts.yml`), extended with the further clones
+they need.
 
 The node must reach the Rancher RPM repository, or the mirror set in
 `rke2_common_yum_repo` and `rke2_versioned_yum_repo`. `dnf` reads repository
@@ -236,7 +258,7 @@ Do this if A was refused or the spec was not applied. It creates the VM but does
 not mark it as a template:
 
 ```bash
-disk/make-template.sh --vmdk output/dev/vmdk/disk.vmdk --name rke2-exp3-tpl --datastore datastore1 --network 'VM Network' --boot-once
+make template VMDK=output/dev/vmdk/disk.vmdk NAME=rke2-exp3-tpl DATASTORE=datastore1 NETWORK='VM Network' TEMPLATE_ARGS=--boot-once
 ```
 
 ```bash
@@ -259,9 +281,10 @@ ssh ansible@<dhcp-ip> sudo rke2-node-generalize
 ```
 
 `rke2-node-generalize` clears cloud-init state and logs, empties
-`/etc/machine-id`, removes SSH host keys, NetworkManager connections and
-leases, the random seed and shell histories, rotates the journal, and powers
-the VM off. It refuses to run on a node that has already run RKE2. Wait for the
+`/etc/machine-id`, removes `/etc/hostname`, SSH host keys, NetworkManager
+connections and leases, `ifcfg-*` files under
+`/etc/sysconfig/network-scripts`, the random seed and shell histories, rotates
+the journal, and powers the VM off. It refuses to run on a node that has already run RKE2. Wait for the
 power-off, then:
 
 ```bash
@@ -295,7 +318,7 @@ network:
         name: "e*"
       addresses: [192.0.2.21/24]
       routes:
-        - to: default
+        - to: 0.0.0.0/0
           via: 192.0.2.1
       nameservers:
         addresses: [192.0.2.53]
@@ -314,6 +337,21 @@ govc vm.power -on rke2-exp3c
 ```
 
 - [ ] Hostname and IP come from the metadata; SSH login works.
+
+Tip: if vCenter accepts the clone but the spec is not applied (cloud-init
+falls back to DHCP and `/var/log/cloud-init.log` says the customization file
+was not found in time), cloud-init may have given up waiting for it. Raise
+`vmware_cust_file_max_wait` (seconds, default 15) with a cloud-init drop-in in
+the site layer, file `rootfs/etc/cloud/cloud.cfg.d/95-site.cfg` in
+`site/common/`, rebuild, and try again:
+
+```yaml
+datasource:
+  VMware:
+    vmware_cust_file_max_wait: 60
+  OVF:
+    vmware_cust_file_max_wait: 60
+```
 
 On failure: if A fails, use B. If B also fails, use C for every clone and
 report it, because it changes how clones are made. If none works, stop and
@@ -347,7 +385,9 @@ Run experiment 3 again with a RHEL 9 (prod) clone once a prod template exists.
       firmware, a paravirtual SCSI controller, VMXNET3 and
       `disk.EnableUUID=TRUE` (`govc vm.info -e <template>`).
 - [ ] A clone boots, takes its hostname and IP from a customization spec
-      (experiment 3), and accepts the Ansible login:
+      (experiment 3), and accepts the Ansible login. With the clone added to
+      the experiment 2 inventory (`<inventory>` is
+      `~/inventories/exp2/hosts.yml`):
       `ansible -i <inventory> all -m ping` and
       `ansible -i <inventory> all -b -m command -a id`.
 - [ ] Two clones have different machine IDs and SSH host keys. On each:
@@ -411,7 +451,12 @@ Run experiment 3 again with a RHEL 9 (prod) clone once a prod template exists.
 - [ ] All nodes are Ready: `kubectl get nodes -o wide`.
 - [ ] `/opt/cni/bin` is populated on every node: `ls /opt/cni/bin`.
 - [ ] No SELinux denials on any node since boot:
-      `sudo ausearch -m avc -ts boot` prints `<no matches>`.
+      `sudo ausearch -m avc -ts boot` prints `<no matches>`. If `ausearch` is
+      not installed (it comes with the `audit` package, which the image does
+      not add), use `sudo journalctl -b --grep 'avc: +denied'`; it prints
+      `-- No entries --`.
+- [ ] Time sync uses the site's servers: `chronyc sources` lists the servers
+      from the site layer's `chrony.conf`, one of them marked `^*`.
 - [ ] The CNI interfaces are not managed by NetworkManager:
       `nmcli device status` shows them as `unmanaged`.
 
@@ -428,9 +473,19 @@ Run experiment 3 again with a RHEL 9 (prod) clone once a prod template exists.
       `rke2-bootc.io/update-in-progress` annotation.
 - [ ] A second run with the same `target_image` changes nothing.
 - [ ] A node an operator cordoned before the run is still cordoned after it.
-- [ ] An interrupted run (stop it during a drain) leaves exactly one node
-      cordoned with the `rke2-bootc.io/update-in-progress` annotation, and a
-      re-run with the same `target_image` finishes that node and the rest.
+- [ ] An interrupted run (stop it during a drain, with the default
+      `agent_batch` of 1) leaves exactly one node cordoned with the
+      `rke2-bootc.io/update-in-progress` annotation, and a re-run with the
+      same `target_image` finishes that node and the rest.
+- [ ] The RKE2 version check stops a mismatch: a run with
+      `-e expected_rke2_version=<a different version>` stops at the first
+      node, after it rebooted, with a message naming both versions. A re-run
+      without that option finishes the marked node and the rest.
+- [ ] A package that creates a system user reaches updated nodes. Add a
+      package to the site layer that creates a user in its install script,
+      with a `sysusers.d` file for that user as `site/README.md` ("Users and
+      groups") requires, build a new tag and roll it out. On a node that was
+      updated (not a fresh clone), `getent passwd <user>` prints the user.
 - [ ] `bootc rollback` and a reboot return a node to the previous image
       (see `docs/operations.md`); `bootc status` shows the previous reference
       as booted.

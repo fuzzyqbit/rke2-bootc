@@ -97,4 +97,5 @@ def test_make_template_passes_template_args(tmp_path):
                "TEMPLATE_ARGS=--hw-version vmx-19 --boot-once"]).stdout
     assert '--guest-id "rhel9_64Guest" --hw-version vmx-19 --boot-once' in out
     plain = run(["make", "-n", "template", "VMDK=d.vmdk", "NAME=t", "DATASTORE=ds", "NETWORK=net"]).stdout
-    assert plain.rstrip().endswith('--guest-id "rhel9_64Guest"')
+    line = next(l for l in plain.splitlines() if "--guest-id" in l)   # make under make adds "Entering" lines
+    assert line.rstrip().endswith('--guest-id "rhel9_64Guest"')

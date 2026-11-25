@@ -66,6 +66,13 @@ they pass.
 - Network access to the Rocky mirror (`ROCKY_MIRROR`), the Rancher RPM
   repository (`RANCHER_RPM_BASEURL`), your container registry (`REGISTRY`),
   and `quay.io` for the Rocky builder image and bootc-image-builder.
+- The node build installs packages from the repository files inside the base
+  image, which point at the public Rocky (or Red Hat) mirrors. `ROCKY_MIRROR`
+  only serves the Rocky base build; it does not change those files. If the
+  build host or the nodes cannot reach the public mirrors, the site layer must
+  replace the base's `etc/yum.repos.d/*.repo` files; site files are applied
+  before any package is installed (see [`site/README.md`](site/README.md),
+  "Replacing the default repositories").
 - For prod (RHEL) builds: a subscribed RHEL 9 build host, logged in to
   `registry.redhat.io`. The RHEL packages come from the host's subscription.
 - Python 3 for `make test` and `make lint` (they create `.venv/`).
@@ -83,7 +90,7 @@ Everything is in `versions.env`:
 | `RHEL_BASE_IMAGE` | Red Hat's RHEL bootc base image |
 | `RANCHER_RPM_BASEURL` | Rancher RPM repository or your mirror |
 | `RKE2_CHANNEL` | Rancher RPM channel, `stable` |
-| `ROCKY_MIRROR` | Rocky package mirror used to build the base |
+| `ROCKY_MIRROR` | Rocky package mirror used to build the base (only the base build; see above) |
 
 The shipped `RKE2_VERSION` is a placeholder. For a cluster you are migrating it
 must be the version that cluster runs now (see
@@ -130,7 +137,7 @@ Run these from the repository root.
    sudo podman login registry.example.com
    ```
 
-4. Build the Rocky base image, and push it so other hosts can use it.
+4. Build the Rocky base image, and push it.
 
    ```bash
    sudo make rocky-base
@@ -139,6 +146,18 @@ Run these from the repository root.
    ```bash
    sudo make rocky-base-push
    ```
+
+   `make rocky-base` runs `bootc-base-imagectl build-rootfs` inside the
+   build, which needs extra build privileges: it passes `--cap-add=all`,
+   `--security-opt=label=type:container_runtime_t` and `--device /dev/fuse`
+   to `podman build`. It also passes `--no-cache --pull=newer`, so every run
+   installs the current Rocky packages instead of reusing a cached layer.
+
+   Always push the base right after building it. `make node` builds with
+   `--pull=newer`: if the registry holds a different base under the same
+   name, it pulls that one over your local build. The Rocky GPG key is fetched
+   over TLS from `ROCKY_MIRROR` during the base build; you can check it
+   against the fingerprint Rocky publishes.
 
 5. Fill in the site layer as described in [`site/README.md`](site/README.md).
    It ships empty; an empty site layer builds.
@@ -182,6 +201,14 @@ Run these from the repository root.
    export GOVC_URL=vcenter.example.com GOVC_USERNAME=user@vsphere.local GOVC_PASSWORD='...' GOVC_DATACENTER=dc1
    ```
 
+   If vCenter uses a self-signed certificate, also set `GOVC_INSECURE=1` (or,
+   better, add the vCenter CA to the build host's trust store).
+
+   `sudo make vmdk` wrote the disk as root. Run `make template` as the same
+   user (`sudo -E make template ...` keeps the `GOVC_*` variables), or first
+   give the output to your user, for example
+   `sudo chown -R "$USER" output`.
+
    ```bash
    make template VMDK=output/dev/vmdk/disk.vmdk NAME=rke2-node-dev-v1.34.3-rke2r1.1 DATASTORE=datastore1 NETWORK='VM Network'
    ```
@@ -193,16 +220,59 @@ Run these from the repository root.
    first boot. `GUEST_ID` defaults to `rhel9_64Guest`; pass `GUEST_ID=...` to
    change it.
 
-   For the options `make template` does not pass (`--hw-version`, `--cpus`,
-   `--memory-mb`, `--pool`, `--folder`, `--boot-once`), run
-   `disk/make-template.sh` directly; run with no arguments, it prints its
-   usage. `--boot-once` is for a vCenter that will not customize a template
-   whose VMware Tools never ran; see experiment 3 in the checklist.
+   Other options of `disk/make-template.sh` (`--hw-version`, `--cpus`,
+   `--memory-mb`, `--pool`, `--folder`, `--boot-once`) go in `TEMPLATE_ARGS`,
+   for example:
+
+   ```bash
+   make template VMDK=output/dev/vmdk/disk.vmdk NAME=rke2-node-dev-v1.34.3-rke2r1.1 DATASTORE=datastore1 NETWORK='VM Network' TEMPLATE_ARGS='--hw-version vmx-19 --pool Cluster1/Resources --folder Templates'
+   ```
+
+   Values in `TEMPLATE_ARGS` are split at spaces; quote a value that contains
+   one inside the string (`TEMPLATE_ARGS="--folder 'My Templates'"`). Run with
+   no arguments, `disk/make-template.sh` prints its usage. `--boot-once` is for
+   a vCenter that will not customize a template whose VMware Tools never ran;
+   see experiment 3 in the checklist.
+
+   How the disk is imported: the script links the VMDK into a temporary
+   directory as `<NAME>.vmdk` and runs `govc import.vmdk -ds <DATASTORE>` on
+   it with no remote path, so the disk lands at `[<DATASTORE>] <NAME>/<NAME>.vmdk`.
+   This is written against two `govc` behaviours: up to 0.55 the remote
+   argument names a directory; from 0.56 on a remote argument must end in
+   `.vmdk`. With no remote argument both write the same path. The VM is
+   created with `-link=false`, so the template has its own full disk. None of
+   this has been run against a real vCenter.
+
+   **By hand.** To build the template step by step (for example to change a
+   setting the script does not offer), run the same `govc` commands yourself.
+   The VMDK from bootc-image-builder is stream-optimized: it must be
+   imported, which converts it, not uploaded to a datastore with the vSphere
+   client's file browser and attached; a VM cannot boot from the uploaded
+   file.
+
+   1. Name the file after the template and import it:
+      `cp output/dev/vmdk/disk.vmdk rke2-tpl.vmdk`, then
+      `govc import.vmdk -ds datastore1 rke2-tpl.vmdk`. The disk lands at
+      `[datastore1] rke2-tpl/rke2-tpl.vmdk`.
+   2. Create a powered-off VM with EFI firmware, a paravirtual SCSI
+      controller, a VMXNET3 adapter and the imported disk as a full (not
+      linked) disk:
+      `govc vm.create -on=false -g rhel9_64Guest -firmware efi -disk.controller pvscsi -net 'VM Network' -net.adapter vmxnet3 -c 4 -m 8192 -ds datastore1 -link=false -disk rke2-tpl/rke2-tpl.vmdk rke2-tpl`.
+   3. Set `disk.EnableUUID`: `govc vm.change -vm rke2-tpl -e disk.EnableUUID=TRUE`.
+      In the vSphere client this is VM Options, Advanced, Configuration
+      Parameters.
+   4. Do not power it on. Mark it as a template:
+      `govc vm.markastemplate rke2-tpl`, or in the vSphere client, Template,
+      Convert to Template.
 
 9. Clone one VM per node from the template, as you do today, with a vSphere
    guest customization spec for hostname and IP. Without one, the node uses
    DHCP. Per-clone `guestinfo` metadata is the alternative (see the
-   checklist, experiment 3).
+   checklist, experiment 3). A clone without a spec or metadata keeps no
+   hostname of its own: every such clone gets the same default or the one
+   DHCP hands out. Kubernetes node names come from the hostname, so give each
+   DHCP-only clone a unique hostname (`sudo hostnamectl hostname <name>`, or
+   DHCP/DNS that hands out unique names) before running the role.
 
 10. Deploy the cluster with `rke2-ansible`. Copy the example inventory, put the
     clones in `rke2_servers` and `rke2_agents`, and set
@@ -261,14 +331,16 @@ the CIS profile, NetworkManager rules that ignore CNI interfaces, root
 filesystem growth at boot, the `rke2-node-generalize` command, and a fact file
 `/etc/ansible/facts.d/rke2_image.fact` holding the RKE2 version. `firewalld` is
 removed. `bootc-fetch-apply-updates.timer` is masked: no node updates or
-reboots on its own. SELinux stays enforcing.
+reboots on its own. SELinux stays enforcing. The build fails if the image
+carries a machine ID or SSH host keys, so clones never share an identity.
 
 Never in the image: registry pull credentials, Red Hat credentials, SSH private
 keys, cluster tokens. The login user and its public key come from
 `disk/config.toml` at disk build time. Registry pull credentials are written to
 `/etc/ostree/auth.json` by the rolling-update playbook from
 `registry_auth_json`, which you keep in Ansible Vault. The site layer build
-stops if it finds a file named `auth.json` or `*.key`, or a private key.
+stops if it finds a file named `auth.json` or `*.key`, or a private key
+(rename public repository GPG keys, see [`site/README.md`](site/README.md)).
 
 ## Other documents
 

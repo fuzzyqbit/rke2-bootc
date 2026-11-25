@@ -12,6 +12,16 @@ Rules for the whole migration:
 - One node at a time: add or retire one node, check the cluster, then move on.
 - Control-plane nodes are swapped so that etcd keeps its quorum at every step.
 - Do not use the role's own upgrade playbook on new nodes.
+- New servers are appended to `rke2_servers` after the existing ones, never
+  put first. If no listed server passes the role's short readiness check
+  when it runs, the role starts the first host in `rke2_servers` as a
+  brand-new cluster; that host must be an existing server, never a new node.
+- Set `rke2_kubernetes_api_server_host` to the load balancer or virtual IP in
+  front of the API before joining any new node. When it is unset, the role
+  writes the first ready server's address as `server:` into every node it
+  joins, which during a migration is an old server about to be retired. If
+  you cannot set it, re-run the role after every control-plane swap so the
+  `server:` address on every node names a server that still exists.
 
 `kubectl` below means a kubectl with cluster-admin access to this cluster,
 for example on a control-plane node:
@@ -70,8 +80,17 @@ sudo make survey-diff SURVEY=survey-server.txt
 sudo make survey-diff SURVEY=survey-agent.txt
 ```
 
-The comparison is always against `ROCKY_BASE_IMAGE`, also for a RHEL cluster;
-expect Rocky and Red Hat branding packages to show up as differences. Some
+The comparison is against `ROCKY_BASE_IMAGE` by default. For a RHEL cluster,
+compare with the RHEL base instead (on a host logged in to
+`registry.redhat.io`):
+
+```bash
+sudo make survey-diff SURVEY=survey-server.txt BASE_IMAGE=registry.redhat.io/rhel9/rhel-bootc:latest
+```
+
+Use the value of `RHEL_BASE_IMAGE` from `versions.env`. Comparing a RHEL node
+with the Rocky base also works, but then Rocky and Red Hat branding packages
+show up as differences. Some
 listed packages are already added by the node image and need no action:
 `open-vm-tools`, `cloud-init`, `cloud-utils-growpart`, `chrony`, `sudo`,
 `python3`, `python3-libselinux`, `python3-dnf`, `rke2-server`, `rke2-agent`,
@@ -103,7 +122,8 @@ Use the survey to fill in `site/` as described in
   under `rootfs/etc/sysctl.d/` or `rootfs/etc/modules-load.d/`.
 - `selinux`: the image runs SELinux enforcing. If old nodes are permissive,
   expect denials to surface on new nodes and check for them
-  (`sudo ausearch -m avc -ts boot`).
+  (`sudo ausearch -m avc -ts boot`, or, without the `audit` package,
+  `sudo journalctl -b --grep 'avc: +denied'`).
 - `rke2-config-keys` and `rke2-env-keys`: these are configured by
   `rke2-ansible`, not by the image. Check that your inventory produces the same
   keys on new nodes.
@@ -144,7 +164,9 @@ cat /etc/ansible/facts.d/rke2_image.fact
    and IP (customization spec or `guestinfo` metadata, whichever experiment 3
    proved).
 2. Add them to the inventory you use for this cluster, next to the old nodes:
-   new control-plane nodes in `rke2_servers`, new workers in `rke2_agents`.
+   new control-plane nodes at the end of `rke2_servers` (never first), new
+   workers in `rke2_agents`. Check that `rke2_kubernetes_api_server_host` is
+   set to the load balancer or virtual IP (see the rules above).
    Keep `ansible_user` matching the login user from `disk/config.toml`; if old
    nodes use a different user, set `ansible_user` per host.
 3. Run the `rke2-ansible` playbook with that inventory, as you do today. The
@@ -209,8 +231,8 @@ majority, and never remove a member while another one is unhealthy.
 The safe order with three old servers is: add one new server (four members),
 remove one old server (three members), and repeat three times. Each round:
 
-1. Clone and add one new server to `rke2_servers` and run `rke2-ansible` as in
-   step 2. Wait until it is Ready.
+1. Clone and add one new server at the end of `rke2_servers` and run
+   `rke2-ansible` as in step 2. Wait until it is Ready.
 2. Check etcd has the new member and all members are healthy, from any
    control-plane node:
 
@@ -226,7 +248,13 @@ remove one old server (three members), and repeat three times. Each round:
    Kubernetes API (load balancer or virtual IP), add the new server to it now
    and take the old server you are about to retire out of it. If the inventory
    or the role names one particular server for others to join through, check it
-   is a server that stays, and change it before retiring that server.
+   is a server that stays, and change it before retiring that server. With
+   `rke2_kubernetes_api_server_host` unset, the role named the first ready
+   server in every node's `server:` setting; if that is the server you are
+   about to retire, re-run the role after this round, once the retired
+   server is out of the inventory, so every node points at a server that
+   stays. Removing retired servers from the top of the list is how a new
+   server eventually becomes the first one; never move a new server up.
 4. Retire one old server: drain it, power it off, `kubectl delete node`, remove
    it from the inventory, as in step 3.
 5. Check etcd again with the `member list` command above. Deleting the node

@@ -60,6 +60,57 @@ start from the new image, and always after an RKE2 version change: a clone of
 an older template has the older RKE2, and the role's install step will fail on
 it once `rke2_install_version` has moved on.
 
+## OS updates
+
+Nodes get operating-system updates only through a new image. To ship them:
+
+1. Rebuild the base.
+   - Dev (Rocky): rebuild and push the Rocky base. `make rocky-base` builds
+     with `--no-cache --pull=newer`, so it installs the current Rocky packages
+     rather than reusing a cached layer. Push it right away: `make node`
+     pulls a newer base from the registry, so an unpushed local base would be
+     replaced by the older one in the registry.
+
+     ```bash
+     sudo make rocky-base
+     ```
+
+     ```bash
+     sudo make rocky-base-push
+     ```
+
+   - Prod (RHEL): nothing to build. `make node` builds with `--pull=newer`
+     and pulls Red Hat's newer `RHEL_BASE_IMAGE` when there is one.
+2. Rebuild the node image with a new `BUILD` number and push it, as in "Build
+   and promote a new image".
+3. Roll it out with the rolling update.
+
+Record which base each node image was built from, because the tag does not
+say. Right after `make node`, note the base image's digest next to the node
+image reference, for example in your change log:
+
+```bash
+sudo podman image inspect --format '{{.Digest}}' "$ROCKY_BASE_IMAGE"
+```
+
+For prod use `RHEL_BASE_IMAGE`. (Load the names first with
+`set -a; . ./versions.env; set +a`.)
+
+## Changes under /etc on updated nodes
+
+On a bootc update, `/etc` is merged: a file the node has not changed takes
+the new image's version, but a file changed on the node keeps the node's
+copy. Every node has changed `/etc/passwd`, `/etc/group` and `/etc/shadow`
+(its login user was added when the disk was built), so these never take a
+new image's version. A user or group that a package creates in its install
+script therefore exists on fresh clones of a new template, but not on nodes
+updated to that image. That is why each site package that adds users or
+groups needs a `sysusers.d` file in the site layer (`site/README.md`, "Users
+and groups"), as the image does for `etcd`. The same applies to any other
+`/etc` file you edit on a node by hand: from then on, image changes to that
+file do not reach the node. Change `/etc` through the image, or through
+Ansible consistently on every node.
+
 ## Run the rolling update
 
 ```bash
@@ -73,12 +124,14 @@ What it does:
    `bootc status` works) built from this image (the
    `/etc/ansible/facts.d/rke2_image.fact` fact exists); there is at least one
    host in `rke2_servers`. It prints the image's RKE2 version next to
-   `rke2_install_version` but does not compare them. Any failure stops the run
-   before anything changes.
+   `rke2_install_version`. Any failure stops the run before anything changes.
 2. Control-plane nodes (`rke2_servers`), one at a time, then workers
    (`rke2_agents`), one at a time unless you set `agent_batch`.
 3. For each node:
-   - A node whose booted image already equals `target_image` is skipped.
+   - A node whose booted image already equals `target_image` is skipped,
+     unless it still carries the update marker (a node left mid-update by an
+     earlier run): then the run waits for it to be Ready, verifies and
+     uncordons it.
    - If `registry_auth_json` is set, it is written to `/etc/ostree/auth.json`.
    - `bootc switch <target_image>` downloads and stages the image. The running
      system does not change yet.
@@ -92,6 +145,10 @@ What it does:
      own API server answers `/readyz` (which includes etcd).
    - It checks that `bootc status --format=json` field
      `.status.booted.image.image.image` equals `target_image` exactly.
+   - It re-reads the image's fact file and stops the run unless its
+     `rke2_version` equals `expected_rke2_version`, which defaults to the
+     inventory's `rke2_install_version`. The message names both versions.
+     With neither variable set, this check is skipped.
    - It uncordons the node, unless the operator had cordoned it, and removes
      both annotations.
 
@@ -109,6 +166,7 @@ updated, another one if there is one.
 | `ready_timeout` | `600` (seconds) | inventory `group_vars`/`host_vars`, or `-e` |
 | `k8s_node_name` | the node's lower-cased host name | inventory `host_vars`, or `-e` |
 | `kubectl` | `/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml` | inventory, or `-e` |
+| `expected_rke2_version` | `rke2_install_version` from the inventory; unset: no check | inventory, or `-e` |
 
 Pass `target_image` and `agent_batch` with `-e`, as the playbook's header
 says. `agent_batch` has a default in the playbook itself, which outranks the
@@ -135,9 +193,11 @@ Any failure on any node stops the whole run, so a bad image stops at the first
 node. What is left behind:
 
 - Nodes already done run the new image and are uncordoned.
-- Exactly one node, the one being worked on, is cordoned and carries the
-  annotation `rke2-bootc.io/update-in-progress` (value: the target image). It
-  may have the new image only staged, or may already have rebooted into it.
+- The node or nodes being worked on are cordoned and carry the annotation
+  `rke2-bootc.io/update-in-progress` (value: the target image): exactly one
+  control-plane node, or up to `agent_batch` workers (one with the default
+  `agent_batch` of 1). Each may have the new image only staged, or may
+  already have rebooted into it.
 - Nodes not yet reached are untouched.
 
 Find the marked node:
@@ -146,8 +206,11 @@ Find the marked node:
 kubectl get nodes -o custom-columns='NAME:.metadata.name,UPDATING:.metadata.annotations.rke2-bootc\.io/update-in-progress'
 ```
 
-Fix the cause (for example a drain blocked by a PodDisruptionBudget, a node
-slow to become Ready, a registry login), then re-run with the same
+Fix the cause (for example a drain blocked by a PodDisruptionBudget, a drain
+refused because of pods not managed by a controller (a bare Pod, not created
+by a Deployment, StatefulSet, DaemonSet or Job: delete or move it yourself),
+a node slow to become Ready, a registry login, or an image whose RKE2 version
+does not match `rke2_install_version`), then re-run with the same
 `target_image`. The re-run finishes the marked node (if it already booted the
 new image, it waits for Ready, verifies and uncordons it; if not, it drains and
 reboots it), then continues with the rest. An operator cordon recorded in the
@@ -224,14 +287,16 @@ RKE2's rules for version changes:
 Steps:
 
 1. Set `RKE2_VERSION` in `versions.env` to the new version.
-2. Build, push and roll out a new image as above (new tag, since the RKE2 part
+2. In the same change, set `rke2_install_version` in the inventory to the new
+   version and point `rke2_versioned_yum_repo` at the new minor version. The
+   rolling update checks every updated node's image against
+   `rke2_install_version`, so an inventory left at the old version stops the
+   run at the first node.
+3. Build, push and roll out a new image as above (new tag, since the RKE2 part
    of the tag changes).
-3. When every node runs the new image, set `rke2_install_version` in the
-   inventory to the new version, and point `rke2_versioned_yum_repo` at the new
-   minor version. Do not run `rke2-ansible` while nodes are on different
-   versions: its install step fails on nodes whose image does not match
-   `rke2_install_version`.
-4. Build a new VMDK and template for future clones.
+4. Do not run `rke2-ansible` until every node runs the new image: its install
+   step fails on nodes whose image does not match `rke2_install_version`.
+5. Build a new VMDK and template for future clones.
 
 ## Registry pull credentials
 
