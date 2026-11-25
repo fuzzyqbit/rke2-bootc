@@ -1,0 +1,6 @@
+pytest
+pyyaml
+yamllint
+ansible-core
+ansible-lint
+shellcheck-py
