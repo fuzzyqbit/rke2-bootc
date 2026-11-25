@@ -1,5 +1,18 @@
 # Move a running cluster to a new node image, one node at a time.
 # Usage: ansible-playbook -i <inventory> ansible/rolling-update.yml -e target_image=<registry/repo:tag>
+#
+# Variables
+#   target_image        required, -e only. Image reference with an explicit tag (never latest).
+#   registry_auth_json  optional. Full content of an auth.json (keep it in Ansible Vault).
+#   agent_batch         workers updated in parallel; default 1; set with -e agent_batch=2.
+#   drain_timeout       seconds for kubectl drain; default 600.
+#   ready_timeout       seconds to wait for the node to be Ready; default 600.
+#   k8s_node_name       Kubernetes node name; default: lower-cased ansible nodename fact.
+#   kubectl             kubectl command line; default:
+#                       /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
+# drain_timeout, ready_timeout, k8s_node_name and kubectl may be set in inventory group_vars or
+# host_vars (or with -e). The playbook only reads them with defaults, so inventory values win.
+# update_marker is fixed (rke2-bootc.io/update-in-progress).
 - name: Preflight checks
   hosts: rke2_servers:rke2_agents
   become: true
@@ -66,11 +79,12 @@
   serial: 1
   vars: &update_vars
     agent_batch: 1
-    drain_timeout: 600
-    ready_timeout: 600
-    k8s_node_name: "{{ ansible_facts.nodename | lower }}"
-    kubectl: /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
     update_marker: rke2-bootc.io/update-in-progress
+    was_cordoned_annotation: rke2-bootc.io/was-cordoned
+    _kubectl: "{{ kubectl | default('/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml') }}"
+    _node: "{{ k8s_node_name | default(ansible_facts.nodename | lower) }}"
+    _drain_timeout: "{{ drain_timeout | default(600) }}"
+    _ready_timeout: "{{ ready_timeout | default(600) }}"
     needs_update: "{{ (bootc_status.stdout | from_json).status.booted.image.image.image != target_image }}"
   tasks:
     - name: Update node

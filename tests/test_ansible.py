@@ -1,3 +1,5 @@
+import os
+
 import yaml
 from conftest import REPO, run
 A = REPO / "ansible"
@@ -41,8 +43,22 @@ def test_interrupted_node_is_finished_but_operator_cordon_is_respected():
         assert "marker" not in str(tasks[name]["when"])      # never re-done for a node already on target
     assert "update_marker" in str(tasks["Mark and cordon node"])
 
+def test_operator_cordon_survives_update():
+    tasks = {t["name"]: t for t in load("tasks/update-node.yml")}
+    for name in ("Mark and cordon node", "Uncordon and clear marker"):
+        assert "was_cordoned_annotation" in str(tasks[name])
+    assert "unschedulable" in str(tasks["Mark and cordon node"])
+
+def test_tunables_are_overridable_from_inventory():
+    plays = load("rolling-update.yml")
+    for p in plays[1:]:
+        for name in ("drain_timeout", "ready_timeout", "k8s_node_name", "kubectl"):
+            assert name not in p["vars"]       # play vars would outrank inventory vars
+    assert plays[2]["vars"]["agent_batch"] == 1
+
 def test_syntax_and_lint():
+    env = {**os.environ, "ANSIBLE_DEPRECATION_WARNINGS": "False"}
     r = run([str(REPO / ".venv/bin/ansible-playbook"), "--syntax-check", "-i", "ansible/inventory.example/hosts.yml",
-             "ansible/rolling-update.yml", "-e", "target_image=r.example.com/x:v1"])
+             "ansible/rolling-update.yml", "-e", "target_image=r.example.com/x:v1"], env=env)
     assert r.returncode == 0, r.stderr
-    assert run([str(REPO / ".venv/bin/ansible-lint"), "ansible/"]).returncode == 0
+    assert run([str(REPO / ".venv/bin/ansible-lint"), "ansible/"], env=env).returncode == 0

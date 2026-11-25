@@ -36,6 +36,7 @@ test: venv
 lint: venv
 	set -euo pipefail; \
 	export PATH="$(CURDIR)/$(BIN):$$PATH"; \
+	export ANSIBLE_DEPRECATION_WARNINGS=False; \
 	scripts=$$( { git ls-files -co --exclude-standard '*.sh'; \
 	  if [ -d node/rootfs/usr ]; then find node/rootfs/usr -type f ! -name '*.*'; fi; } | sort -u ); \
 	if [ -n "$$scripts" ]; then shellcheck $$scripts; fi; \

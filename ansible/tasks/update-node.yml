@@ -10,7 +10,7 @@
 
 - name: Read update marker
   ansible.builtin.command: >-
-    {{ kubectl }} get node {{ k8s_node_name }}
+    {{ _kubectl }} get node {{ _node }}
     -o jsonpath='{.metadata.annotations.{{ update_marker | replace('.', '\.') }}}'
   delegate_to: "{{ kube_host }}"
   register: node_marker
@@ -32,17 +32,39 @@
   when: needs_update | bool
 
 - name: Mark and cordon node
-  ansible.builtin.command: "{{ item }}"
-  loop:
-    - "{{ kubectl }} annotate node {{ k8s_node_name }} {{ update_marker }}={{ target_image }} --overwrite"
-    - "{{ kubectl }} cordon {{ k8s_node_name }}"
-  delegate_to: "{{ kube_host }}"
-  changed_when: true
   when: needs_update | bool
+  delegate_to: "{{ kube_host }}"
+  block:
+    - name: Read whether node is already cordoned
+      ansible.builtin.command: "{{ _kubectl }} get node {{ _node }} -o jsonpath={.spec.unschedulable}"
+      register: node_unschedulable
+      changed_when: false
+
+    # Only a fresh run decides this; a rerun after an interruption would see our own cordon.
+    - name: Remember an operator cordon
+      ansible.builtin.command: "{{ _kubectl }} annotate node {{ _node }} {{ was_cordoned_annotation }}=true --overwrite"
+      changed_when: true
+      when:
+        - node_marker.stdout | trim | length == 0
+        - node_unschedulable.stdout | trim == 'true'
+
+    - name: Forget a stale operator cordon
+      ansible.builtin.command: "{{ _kubectl }} annotate node {{ _node }} {{ was_cordoned_annotation }}-"
+      changed_when: true
+      when:
+        - node_marker.stdout | trim | length == 0
+        - node_unschedulable.stdout | trim != 'true'
+
+    - name: Annotate and cordon
+      ansible.builtin.command: "{{ item }}"
+      loop:
+        - "{{ _kubectl }} annotate node {{ _node }} {{ update_marker }}={{ target_image }} --overwrite"
+        - "{{ _kubectl }} cordon {{ _node }}"
+      changed_when: true
 
 - name: Drain node
   ansible.builtin.command: >-
-    {{ kubectl }} drain {{ k8s_node_name }} --ignore-daemonsets --delete-emptydir-data --timeout={{ drain_timeout }}s
+    {{ _kubectl }} drain {{ _node }} --ignore-daemonsets --delete-emptydir-data --timeout={{ _drain_timeout }}s
   delegate_to: "{{ kube_host }}"
   changed_when: true
   when: needs_update | bool
@@ -53,7 +75,7 @@
   when: needs_update | bool
 
 - name: Wait for node Ready
-  ansible.builtin.command: "{{ kubectl }} wait --for=condition=Ready node/{{ k8s_node_name }} --timeout={{ ready_timeout }}s"
+  ansible.builtin.command: "{{ _kubectl }} wait --for=condition=Ready node/{{ _node }} --timeout={{ _ready_timeout }}s"
   delegate_to: "{{ kube_host }}"
   register: node_ready
   until: node_ready.rc == 0
@@ -63,7 +85,7 @@
   when: needs_update | bool or (node_marker.stdout | trim | length > 0)
 
 - name: Wait for API server and etcd
-  ansible.builtin.command: "{{ kubectl }} get --raw /readyz"
+  ansible.builtin.command: "{{ _kubectl }} get --raw /readyz"
   register: api_ready
   until: api_ready.rc == 0
   retries: 30
@@ -79,10 +101,24 @@
   when: needs_update | bool or (node_marker.stdout | trim | length > 0)
 
 - name: Uncordon and clear marker
-  ansible.builtin.command: "{{ item }}"
-  loop:
-    - "{{ kubectl }} uncordon {{ k8s_node_name }}"
-    - "{{ kubectl }} annotate node {{ k8s_node_name }} {{ update_marker }}-"
-  delegate_to: "{{ kube_host }}"
-  changed_when: true
   when: needs_update | bool or (node_marker.stdout | trim | length > 0)
+  delegate_to: "{{ kube_host }}"
+  block:
+    - name: Read operator cordon annotation
+      ansible.builtin.command: >-
+        {{ _kubectl }} get node {{ _node }}
+        -o jsonpath='{.metadata.annotations.{{ was_cordoned_annotation | replace('.', '\.') }}}'
+      register: node_was_cordoned
+      changed_when: false
+
+    - name: Uncordon unless the operator had cordoned the node
+      ansible.builtin.command: "{{ _kubectl }} uncordon {{ _node }}"
+      changed_when: true
+      when: node_was_cordoned.stdout | trim != 'true'
+
+    - name: Remove annotations
+      ansible.builtin.command: "{{ _kubectl }} annotate node {{ _node }} {{ item }}-"
+      loop:
+        - "{{ update_marker }}"
+        - "{{ was_cordoned_annotation }}"
+      changed_when: true
