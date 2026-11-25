@@ -1,0 +1,18 @@
+# base/rocky/Containerfile
+ARG BUILDER_IMAGE=quay.io/centos-bootc/centos-bootc:stream9
+FROM ${BUILDER_IMAGE} AS builder
+ARG ROCKY_MIRROR
+ARG EL_MAJOR=9
+COPY base/rocky/rocky.repo /tmp/rocky.repo
+RUN rm -f /etc/yum.repos.d/*.repo \
+ && sed -e "s|@MIRROR@|${ROCKY_MIRROR}|g" -e "s|@EL@|${EL_MAJOR}|g" /tmp/rocky.repo > /etc/yum.repos.d/rocky.repo \
+ && curl -fsSL "${ROCKY_MIRROR}/RPM-GPG-KEY-Rocky-${EL_MAJOR}" -o /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-${EL_MAJOR}
+RUN /usr/libexec/bootc-base-imagectl build-rootfs --manifest=standard /target-rootfs
+
+FROM scratch
+COPY --from=builder /target-rootfs/ /
+LABEL containers.bootc=1
+LABEL ostree.bootable=1
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
+RUN bootc container lint

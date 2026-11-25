@@ -1,8 +1,10 @@
 SHELL := /bin/bash
+include versions.env
+CONTAINER_TOOL ?= podman
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: venv test lint
+.PHONY: venv test lint rocky-base rocky-base-push
 
 venv: $(BIN)/pytest
 
@@ -28,3 +30,10 @@ lint: venv
 	  if [ "$${#playbooks[@]}" -eq 0 ]; then echo "no playbooks in ansible/" >&2; exit 1; fi; \
 	  for pb in "$${playbooks[@]}"; do ansible-playbook --syntax-check "$$pb"; done; \
 	fi
+
+rocky-base:
+	$(CONTAINER_TOOL) build -f base/rocky/Containerfile -t $(ROCKY_BASE_IMAGE) \
+	  --build-arg ROCKY_MIRROR=$(ROCKY_MIRROR) --build-arg EL_MAJOR=$(EL_MAJOR) .
+
+rocky-base-push:
+	$(CONTAINER_TOOL) push $(ROCKY_BASE_IMAGE)
