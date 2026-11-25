@@ -55,6 +55,11 @@
         - node_marker.stdout | trim | length == 0
         - node_unschedulable.stdout | trim != 'true'
 
+    - name: Record boot ID before reboot
+      ansible.builtin.command: "{{ _kubectl }} get node {{ _node }} -o jsonpath={.status.nodeInfo.bootID}"
+      register: node_boot_before
+      changed_when: false
+
     - name: Annotate and cordon
       ansible.builtin.command: "{{ item }}"
       loop:
@@ -74,12 +79,21 @@
     reboot_timeout: 900
   when: needs_update | bool
 
+# Polls one cheap query: "<bootID> <Ready status>". A node rebooted in this run must report a new
+# boot ID, otherwise the Ready=True from before the reboot could satisfy the check. Connection
+# errors while the API comes back count as "not yet". Total time is about ready_timeout.
 - name: Wait for node Ready
-  ansible.builtin.command: "{{ _kubectl }} wait --for=condition=Ready node/{{ _node }} --timeout={{ _ready_timeout }}s"
+  ansible.builtin.command: >-
+    {{ _kubectl }} get node {{ _node }}
+    -o jsonpath='{.status.nodeInfo.bootID}{" "}{.status.conditions[?(@.type=="Ready")].status}'
   delegate_to: "{{ kube_host }}"
   register: node_ready
-  until: node_ready.rc == 0
-  retries: 30
+  until:
+    - node_ready.rc == 0
+    - (node_ready.stdout | default('')).split() | length == 2
+    - (node_ready.stdout | default('')).split()[1] == 'True'
+    - (not (needs_update | bool)) or (node_ready.stdout | default('')).split()[0] != (node_boot_before.stdout | default('') | trim)
+  retries: "{{ [((_ready_timeout | int) / 10) | round(0, 'ceil') | int, 1] | max }}"
   delay: 10
   changed_when: false
   when: needs_update | bool or (node_marker.stdout | trim | length > 0)

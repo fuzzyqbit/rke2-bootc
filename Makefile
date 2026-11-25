@@ -42,11 +42,11 @@ lint: venv
 	if [ -n "$$scripts" ]; then shellcheck $$scripts; fi; \
 	yamllint -s .; \
 	if [ -d ansible ]; then \
-	  ansible-lint ansible/; \
+	  ansible-lint $$(find ansible -name '*.yml' | sort); \
 	  shopt -s nullglob; \
 	  playbooks=(ansible/*.yml); \
 	  if [ "$${#playbooks[@]}" -eq 0 ]; then echo "no playbooks in ansible/" >&2; exit 1; fi; \
-	  for pb in "$${playbooks[@]}"; do ansible-playbook --syntax-check "$$pb"; done; \
+	  for pb in "$${playbooks[@]}"; do ansible-playbook --syntax-check -i ansible/inventory.example/hosts.yml "$$pb"; done; \
 	fi
 
 rocky-base:

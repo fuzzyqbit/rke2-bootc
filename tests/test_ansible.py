@@ -56,6 +56,14 @@ def test_tunables_are_overridable_from_inventory():
             assert name not in p["vars"]       # play vars would outrank inventory vars
     assert plays[2]["vars"]["agent_batch"] == 1
 
+def test_ready_wait_is_bounded_and_checks_boot_id():
+    text = (A / "tasks/update-node.yml").read_text()
+    assert "kubectl }} wait" not in text and "wait --for" not in text   # no nested kubectl retries
+    task = next(t for t in load("tasks/update-node.yml") if t["name"] == "Wait for node Ready")
+    assert "bootID" in str(task["command"] if "command" in task else task) or "bootID" in str(task)
+    assert "Ready" in str(task) and "node_boot_before" in str(task["until"])
+    assert "_ready_timeout" in str(task["retries"]) and task["delay"] == 10
+
 def test_syntax_and_lint():
     env = {**os.environ, "ANSIBLE_DEPRECATION_WARNINGS": "False"}
     r = run([str(REPO / ".venv/bin/ansible-playbook"), "--syntax-check", "-i", "ansible/inventory.example/hosts.yml",

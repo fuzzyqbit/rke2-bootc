@@ -12,6 +12,8 @@
 #                       /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
 # drain_timeout, ready_timeout, k8s_node_name and kubectl may be set in inventory group_vars or
 # host_vars (or with -e). The playbook only reads them with defaults, so inventory values win.
+# kubectl and k8s_node_name are read from the node being updated, but the kubectl commands run on a
+# control-plane node.
 # update_marker is fixed (rke2-bootc.io/update-in-progress).
 - name: Preflight checks
   hosts: rke2_servers:rke2_agents
