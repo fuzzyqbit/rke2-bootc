@@ -58,3 +58,23 @@ def test_shipped_site_layer_is_empty_and_valid(fake_bin, tmp_path):
     for e in ("dev", "prod"):
         r, log, _ = go(fake_bin, tmp_path / e, REPO / "site", env_name=e)
         assert r.returncode == 0 and calls(log) == []
+
+def test_default_root_slash_and_trailing_slash_work(fake_bin, tmp_path):
+    # SITE_TARGET_ROOT=/ (the real build default) must not break; the layer is
+    # empty (.gitkeep and comment-only lists), so nothing is written to /.
+    env, log = fake_bin({"dnf": "", "systemctl": "", "update-ca-trust": ""})
+    for value in ("/", None):
+        e = dict(env)
+        e.pop("SITE_TARGET_ROOT", None)
+        if value:
+            e["SITE_TARGET_ROOT"] = value
+        r = run([S, str(REPO / "site"), "dev"], env=e)
+        assert r.returncode == 0, r.stderr
+    assert calls(log) == []
+
+def test_trailing_slash_root_still_works(fake_bin, tmp_path):
+    env, log = fake_bin({"dnf": "", "systemctl": "", "update-ca-trust": ""})
+    root = tmp_path / "root"; root.mkdir()
+    env["SITE_TARGET_ROOT"] = str(root) + "/"
+    r = run([S, str(site(tmp_path)), "dev"], env=env)
+    assert r.returncode == 0 and (root / "etc/common.conf").read_text() == "c"

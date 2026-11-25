@@ -12,6 +12,8 @@ site_dir="$1"
 env_name="$2"
 root="${SITE_TARGET_ROOT:-/}"
 root="${root%/}"
+# "/" strips to empty; restore it so later paths ("$root/opt", mkdir, cp target) stay valid.
+[[ -n "$root" ]] || root="/"
 
 if [[ "$env_name" != dev && "$env_name" != prod ]]; then
   echo "apply-site.sh: env must be dev or prod, got '$env_name'" >&2
