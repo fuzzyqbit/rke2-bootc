@@ -1,0 +1,13 @@
+[Unit]
+Description=Grow the root partition and filesystem to fill the disk
+After=local-fs.target
+Before=rke2-server.service rke2-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+MountFlags=slave
+ExecStart=/usr/libexec/rke2-node/growroot
+
+[Install]
+WantedBy=multi-user.target
