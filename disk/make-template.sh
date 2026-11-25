@@ -45,8 +45,17 @@ fi
 [ -z "$folder" ] || create_args+=(-folder "$folder")
 [ -z "$hwv" ] || create_args+=(-version "$hwv")
 
-govc import.vmdk "${import_args[@]}" "$vmdk" "$name"
-govc vm.create "${create_args[@]}" -disk "$name/$(basename "$vmdk")" "$name"
+# Import without a remote path argument, from a temporary symlink named <name>.vmdk: govc up
+# to 0.55 and from 0.56 on then both write [ds] <name>/<name>.vmdk (0.56 rejects a remote path
+# that does not end in .vmdk, so passing "$name" as the remote directory no longer works).
+tmpdir=$(mktemp -d)
+trap 'rm -rf -- "$tmpdir"' EXIT
+vmdk_abs=$(cd "$(dirname "$vmdk")" && pwd)/$(basename "$vmdk")
+ln -s "$vmdk_abs" "$tmpdir/$name.vmdk"
+
+govc import.vmdk "${import_args[@]}" "$tmpdir/$name.vmdk"
+# -link=false: the template gets its own disk, not a linked child of the imported one.
+govc vm.create "${create_args[@]}" -link=false -disk "$name/$name.vmdk" "$name"
 govc vm.change -vm "$name" -e disk.EnableUUID=TRUE
 
 if [ "$boot_once" -eq 1 ]; then

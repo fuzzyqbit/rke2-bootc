@@ -75,13 +75,15 @@ vmdk:
 	disk/build-vmdk.sh $(NODE_REF) disk/config.toml output/$(ENV)
 
 GUEST_ID ?= rhel9_64Guest
+# Extra make-template.sh options, e.g. TEMPLATE_ARGS='--hw-version vmx-19 --pool P --folder F --boot-once'
+TEMPLATE_ARGS ?=
 template:
 	@test -n "$(VMDK)" || { echo "error: VMDK is required" >&2; exit 2; }
 	@test -n "$(NAME)" || { echo "error: NAME is required" >&2; exit 2; }
 	@test -n "$(DATASTORE)" || { echo "error: DATASTORE is required" >&2; exit 2; }
 	@test -n "$(NETWORK)" || { echo "error: NETWORK is required" >&2; exit 2; }
 	disk/make-template.sh --vmdk "$(VMDK)" --name "$(NAME)" --datastore "$(DATASTORE)" \
-	  --network "$(NETWORK)" --guest-id "$(GUEST_ID)"
+	  --network "$(NETWORK)" --guest-id "$(GUEST_ID)" $(TEMPLATE_ARGS)
 
 # survey-diff compares with the Rocky base unless told otherwise; for a RHEL
 # cluster pass BASE_IMAGE=$(RHEL_BASE_IMAGE).

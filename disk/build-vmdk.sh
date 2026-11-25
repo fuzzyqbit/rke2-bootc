@@ -38,4 +38,6 @@ abs_output=$(cd "$output" && pwd)
   -v /var/lib/containers/storage:/var/lib/containers/storage \
   "$BIB_IMAGE" --type vmdk --rootfs xfs --config /config.toml "$ref"
 
-echo "VMDK written to $abs_output/vmdk/disk.vmdk"
+vmdk="$abs_output/vmdk/disk.vmdk"
+[ -s "$vmdk" ] || { echo "error: bootc-image-builder finished but $vmdk was not written" >&2; exit 1; }
+echo "VMDK written to $vmdk"
