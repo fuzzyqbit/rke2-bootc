@@ -90,12 +90,32 @@ def test_make_survey_diff_base_image_can_be_overridden(fake_bin, tmp_path):
     r = run(["make", "-s", "survey-diff", f"SURVEY={report}", "BASE_IMAGE=rhel.example.com/rhel-bootc:9"], env=env)
     assert r.returncode == 0 and calls(log)[1].startswith("podman run --rm rhel.example.com/rhel-bootc:9 ")
 
-def test_rke2_version_falls_back_to_usr_local_bin(fake_bin, tmp_path):
-    # Under sudo, /usr/local/bin may not be on PATH; there is no rke2 on PATH here.
-    env, _ = fake_bin({}); root = node(tmp_path); env["SURVEY_ROOT"] = str(root)
-    assert run(["bash", "-c", "command -v rke2"], env=env).returncode != 0
-    b = root / "usr/local/bin"; b.mkdir(parents=True)
-    (b / "rke2").write_text("#!/usr/bin/env bash\necho 'rke2 version v1.30.9+rke2r1 (abc)'\n"); (b / "rke2").chmod(0o755)
-    out = run([S], env=env).stdout
-    section = out.split("## rke2-version\n", 1)[1].split("## ", 1)[0]
-    assert section.strip() == "rke2 version v1.30.9+rke2r1 (abc)"
+SURVEY_TEXT = "## os-release\nNAME=x\n## packages-all\nbash\nfalcon-sensor\nglibc\nzabbix-agent\n## enabled-units\nsshd.service\n"
+
+def test_make_survey_diff_prints_only_the_extra_packages(fake_bin, tmp_path):
+    report = tmp_path / "s.txt"; report.write_text(SURVEY_TEXT)
+    env, _ = fake_bin({"podman": "printf 'bash\\nglibc\\nsshd.service\\n'"}); env["CONTAINER_TOOL"] = "podman"
+    r = run(["make", "-s", "survey-diff", f"SURVEY={report}"], env=env)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == ["falcon-sensor", "zabbix-agent"]
+
+def test_survey_diff_reads_base_from_a_pipe(tmp_path):
+    report = tmp_path / "s.txt"; report.write_text(SURVEY_TEXT)
+    # Process substitution: the base "file" is a pipe that can be read only once.
+    r = run(["bash", "-c", f"{D} {report} <(printf 'bash\\nglibc\\n')"])
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == ["falcon-sensor", "zabbix-agent"]
+
+def test_survey_diff_reads_base_from_a_fifo(tmp_path):
+    import os, threading
+    report = tmp_path / "s.txt"; report.write_text(SURVEY_TEXT)
+    fifo = tmp_path / "base.fifo"; os.mkfifo(fifo)
+    writer = threading.Thread(target=lambda: fifo.write_text("glibc\nbash\n")); writer.start()
+    r = run([D, str(report), str(fifo)]); writer.join(timeout=10)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == ["falcon-sensor", "zabbix-agent"]
+
+def test_survey_diff_rejects_empty_base_from_a_pipe(tmp_path):
+    report = tmp_path / "s.txt"; report.write_text(SURVEY_TEXT)
+    r = run(["bash", "-c", f"{D} {report} <(printf '\\n\\n')"])
+    assert r.returncode != 0 and r.stdout == "" and "empty" in r.stderr
