@@ -50,9 +50,12 @@ now own its whole content; for a small change a drop-in with a later name
 keep up to date. Unit files you ship are in place before units are enabled.
 Both phases can be run more than once with the same result.
 
-Copied files and directories are owned by root (ownership in your checkout
-is not kept), and group and other write permission is removed from them.
-Executable bits are kept.
+Directories that already exist in the image are never changed: their mode,
+owner and timestamps stay as they are, whatever the modes in your checkout.
+A directory the image does not have yet is created with mode 0755, owned by
+root. Copied files are owned by root (ownership in your checkout is not
+kept), group and other write permission is removed from them, and their
+other permission bits (executable bits included) are kept.
 
 ## Rules
 
@@ -71,6 +74,8 @@ Executable bits are kept.
 - `/usr` is read-only on a node. Only `/etc` and `/var` are writable.
 - Files an RPM installs under `/var` reach a node only at first install and
   are not updated when the node moves to a new image. Do not depend on them.
+- Files under `/var/cache`, `/var/log` and `/var/lib/dnf` are removed at the
+  end of the image build, so the site layer cannot place files there.
 - Units are only enabled, not started, at build time.
 - Do not place `rke2-server.service` or `rke2-agent.service` in `units.txt`.
   They stay disabled in the image.

@@ -190,3 +190,35 @@ def test_trailing_slash_root_still_works(fake_bin, tmp_path):
     env["SITE_TARGET_ROOT"] = str(root) + "/"
     r = run([S, str(site(tmp_path)), "dev", "files"], env=env)
     assert r.returncode == 0 and (root / "etc/common.conf").read_text() == "c"
+
+@pytest.mark.parametrize("src_mode", [0o775, 0o750])
+def test_copy_never_changes_existing_target_directories(fake_bin, tmp_path, src_mode):
+    # cp --parents would re-apply the source directory modes to the target root and /etc whenever
+    # it has to create a directory (here etc/cloud, which does not exist before cloud-init is installed).
+    s = site(tmp_path)
+    (s / "dev/rootfs/etc/env.conf").unlink()
+    nested = s / "common/rootfs/etc/cloud/cloud.cfg.d"; nested.mkdir(parents=True)
+    (nested / "95-site.cfg").write_text("cfg")
+    for d in [s / "common/rootfs", *(p for p in (s / "common/rootfs").rglob("*") if p.is_dir())]:
+        d.chmod(src_mode)
+    src_dirs = [s / "common/rootfs", *(p for p in (s / "common/rootfs").rglob("*") if p.is_dir())]
+    for d in sorted(src_dirs, key=lambda p: -len(p.parts)):
+        os.utime(d, (1_500_000_000, 1_500_000_000))       # source timestamps must not reach the target
+    env, log = fake_bin(FAKES)
+    root = tmp_path / "root"; (root / "etc").mkdir(parents=True)
+    for d in (root, root / "etc"):
+        d.chmod(0o755); os.utime(d, (1_000_000_000, 1_000_000_000))
+    env["SITE_TARGET_ROOT"] = str(root)
+    for phase in ("files", "packages"):
+        r = run([S, str(s), "dev", phase], env=env)
+        assert r.returncode == 0, r.stderr
+    for d in (root, root / "etc"):
+        assert stat.S_IMODE(d.stat().st_mode) == 0o755, d
+        assert d.stat().st_mtime != 1_500_000_000, d
+    assert root.stat().st_mtime == 1_000_000_000       # no entry added to the root: untouched
+    for d in (root / "etc/cloud", root / "etc/cloud/cloud.cfg.d"):
+        assert stat.S_IMODE(d.stat().st_mode) == 0o755, d
+    assert (root / "etc/cloud/cloud.cfg.d/95-site.cfg").read_text() == "cfg"
+    assert (root / "etc/common.conf").read_text() == "c"
+    for f in (root / "etc/cloud/cloud.cfg.d/95-site.cfg", root / "etc/common.conf"):
+        assert not f.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH), f

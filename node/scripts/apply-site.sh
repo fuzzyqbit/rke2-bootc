@@ -73,28 +73,35 @@ apply_opt_marker() {
   fi
 }
 
-# Copy rootfs trees over the image root. Ownership is not preserved (the build runs as
-# root, so files become root:root, not the checkout owner's UID), and group/other write
-# bits are cleared on every copied file and on every directory the copy created.
+# Copy rootfs trees over the image root. cp never creates or touches a directory: missing
+# target directories are created here, top-down, with mode 0755 (root-owned in the build);
+# directories that already exist in the target keep their mode, owner and timestamps (cp
+# --parents would re-apply the source directories' modes to them, the target root included).
+# Each file is copied into its existing parent without keeping ownership, and group/other
+# write bits are cleared on it.
 copy_rootfs() {
-  local part rootfs d
-  local -a new_dirs files
+  local part rootfs f rel dir c
+  local -a files comps
+  if [[ ! -d "$root" ]]; then
+    mkdir -p "$root"
+    chmod 0755 "$root"
+  fi
   for part in "${parts[@]}"; do
     rootfs="$site_dir/$part/rootfs"
     [[ -d "$rootfs" ]] || continue
-    mkdir -p "$root"
     mapfile -d '' -t files < <(cd "$rootfs" && find . ! -type d ! -name .gitkeep ! -name '*.example' -print0)
-    [[ ${#files[@]} -gt 0 ]] || continue
-    new_dirs=()
-    while IFS= read -r -d '' d; do
-      [[ -e "$root/$d" ]] || new_dirs+=("$root/$d")
-    done < <(cd "$rootfs" && find . -mindepth 1 -type d -print0)
-    (cd "$rootfs" && cp -a --no-preserve=ownership --parents --remove-destination --target-directory="$root" "${files[@]}")
-    for d in "${new_dirs[@]}"; do
-      if [[ -d "$d" ]]; then chmod go-w "$d"; fi
-    done
-    for d in "${files[@]}"; do
-      if [[ ! -L "$root/$d" ]]; then chmod go-w "$root/$d"; fi
+    for f in "${files[@]}"; do
+      rel="${f#./}"
+      dir="$root"
+      comps=()
+      IFS=/ read -r -a comps <<< "$(dirname "$rel")"
+      for c in "${comps[@]}"; do
+        [[ "$c" == . || -z "$c" ]] && continue
+        dir="$dir/$c"
+        if [[ ! -d "$dir" ]]; then mkdir -m 0755 "$dir"; fi
+      done
+      cp -a --no-preserve=ownership --remove-destination "$rootfs/$rel" "$root/$rel"
+      if [[ ! -L "$root/$rel" ]]; then chmod go-w "$root/$rel"; fi
     done
   done
 }
