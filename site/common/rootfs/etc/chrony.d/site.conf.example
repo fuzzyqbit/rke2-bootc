@@ -1,4 +1,0 @@
-# Rename this file to site.conf and list your NTP servers.
-# Files named *.example are never copied into the image.
-server ntp1.example.com iburst
-server ntp2.example.com iburst

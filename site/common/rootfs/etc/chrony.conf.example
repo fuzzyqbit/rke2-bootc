@@ -1,0 +1,12 @@
+# Complete replacement for /etc/chrony.conf. Rename this file to chrony.conf
+# and replace the example servers. Files named *.example are never copied into
+# the image. A complete file is needed: EL9's default chrony.conf reads no
+# drop-in directory, so a file under /etc/chrony.d would be ignored.
+server ntp1.example.com iburst
+server ntp2.example.com iburst
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+keyfile /etc/chrony.keys
+leapsectz right/UTC
+logdir /var/log/chrony

@@ -19,9 +19,14 @@ def test_build_fails_if_image_carries_an_identity():
     assert CF.index("test ! -s /etc/machine-id") < CF.index("RUN bootc container lint")
 
 def test_order_of_layers():
-    i = [CF.index(s) for s in ("install-rke2.sh", "COPY node/rootfs/ /", "apply-site.sh",
+    # Site files (repository definitions, CA anchors) come before every dnf step; site packages
+    # come after the RKE2 layer and the node rootfs.
+    i = [CF.index(s) for s in ('apply-site.sh /run/site "${SITE_ENV}" files', "RUN dnf -y install",
+                               "install-rke2.sh", "COPY node/rootfs/ /",
+                               'apply-site.sh /run/site "${SITE_ENV}" packages',
                                "systemctl mask bootc-fetch-apply-updates.timer", "RUN bootc container lint")]
     assert i == sorted(i)
+    assert CF.count("apply-site.sh") == 2
 
 def test_no_self_update_and_no_rke2_enable():
     assert "mask bootc-fetch-apply-updates.timer" in CF

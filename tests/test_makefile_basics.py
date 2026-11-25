@@ -26,3 +26,23 @@ def test_ansible_tools_are_pinned_to_the_tested_versions():
     reqs = (REPO / "requirements-dev.txt").read_text().split()
     assert any(r.startswith("ansible-core==") for r in reqs)
     assert any(r.startswith("ansible-lint==") for r in reqs)
+
+
+def test_lint_ignores_site_rootfs_and_output():
+    # The owner's site files (vendor YAML, shell snippets) and build output are not ours to lint.
+    made = []
+    try:
+        for d in (REPO / "site/dev/rootfs/etc/zz-lint-check", REPO / "output/zz-lint-check"):
+            d.mkdir(parents=True, exist_ok=False); made.append(d)
+            (d / "bad.yaml").write_text("a:  b\nkey: [1,2]\n")
+            (d / "bad.sh").write_text("#!/usr/bin/env bash\necho $unquoted_var_x $(ls)\n")
+        r = run(["make", "lint"])
+        assert r.returncode == 0, r.stdout + r.stderr
+    finally:
+        for d in made:
+            for f in d.iterdir():
+                f.unlink()
+            d.rmdir()
+        out = REPO / "output"
+        if out.exists() and not any(out.iterdir()):
+            out.rmdir()

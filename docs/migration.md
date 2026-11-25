@@ -88,9 +88,11 @@ Use the survey to fill in `site/` as described in
   Their repositories go under `rootfs/etc/yum.repos.d/` in the same part.
 - `enabled-units`: units your site software needs go in `units.txt`. Never add
   `rke2-server.service` or `rke2-agent.service`.
-- `time-sync`: copy the `server`/`pool` lines into
-  `site.conf` in `site/common/rootfs/etc/chrony.d/` (start from
-  `site/common/rootfs/etc/chrony.d/site.conf.example`).
+- `time-sync`: copy the `server`/`pool` lines into a complete `chrony.conf`
+  in `site/common/rootfs/etc/` (start from
+  `site/common/rootfs/etc/chrony.conf.example`, renamed to `chrony.conf`).
+  It replaces the image's `/etc/chrony.conf`; EL9 reads no `chrony.d` drop-in
+  directory by default, so a drop-in file there would be ignored.
 - `ca-trust-anchors`: put the same CA certificates under
   `rootfs/etc/pki/ca-trust/source/anchors/`.
 - `opt-contents`: if a package you keep installs under `/opt`, create the

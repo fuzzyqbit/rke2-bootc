@@ -2,6 +2,8 @@ extends: default
 ignore: |
   .venv/
   .superpowers/
+  site/*/rootfs/
+  output/
 rules:
   line-length:
     max: 160

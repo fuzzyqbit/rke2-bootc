@@ -14,6 +14,12 @@ ARG RANCHER_RPM_BASEURL=https://rpm.rancher.io
 ARG RKE2_CHANNEL=stable
 ARG EL_MAJOR=9
 
+# Site files first (repository definitions, CA anchors, configuration), so every
+# dnf step below uses the site's repositories and trusts the site's CA.
+RUN --mount=type=bind,from=ctx,source=/scripts,target=/run/build \
+    --mount=type=bind,from=ctx,source=/site,target=/run/site \
+    /run/build/apply-site.sh /run/site "${SITE_ENV}" files
+
 RUN dnf -y install open-vm-tools cloud-init cloud-utils-growpart chrony sudo \
       python3 python3-libselinux python3-dnf \
  && (dnf -y remove firewalld || true)
@@ -26,9 +32,10 @@ COPY node/rootfs/ /
 RUN chmod 0440 /etc/sudoers.d/10-wheel-nopasswd \
  && chmod 0755 /usr/sbin/rke2-node-generalize /usr/libexec/rke2-node/growroot
 
+# Site packages and units.
 RUN --mount=type=bind,from=ctx,source=/scripts,target=/run/build \
     --mount=type=bind,from=ctx,source=/site,target=/run/site \
-    /run/build/apply-site.sh /run/site "${SITE_ENV}"
+    /run/build/apply-site.sh /run/site "${SITE_ENV}" packages
 
 RUN systemctl enable vmtoolsd.service sshd.service chronyd.service rke2-node-growroot.service \
  && for u in cloud-init-local cloud-init cloud-init-network cloud-config cloud-final; do \
