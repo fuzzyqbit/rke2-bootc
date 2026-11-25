@@ -99,3 +99,10 @@ def test_make_template_passes_template_args(tmp_path):
     plain = run(["make", "-n", "template", "VMDK=d.vmdk", "NAME=t", "DATASTORE=ds", "NETWORK=net"]).stdout
     line = next(l for l in plain.splitlines() if "--guest-id" in l)   # make under make adds "Entering" lines
     assert line.rstrip().endswith('--guest-id "rhel9_64Guest"')
+
+def test_template_missing_vmdk_exits_2_before_govc(fake_bin, tmp_path):
+    env, log = fake_bin({"govc": ""}); _, a = args(tmp_path)
+    a[1] = str(tmp_path / "nope.vmdk")
+    r = run([MT, *a], env=env)
+    assert r.returncode == 2 and "nope.vmdk" in r.stderr and "does not exist" in r.stderr
+    assert calls(log) == []

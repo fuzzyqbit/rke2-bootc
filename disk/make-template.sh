@@ -34,6 +34,7 @@ done
 [ -n "$name" ] || { echo "error: --name is required" >&2; usage; }
 [ -n "$ds" ] || { echo "error: --datastore is required" >&2; usage; }
 [ -n "$net" ] || { echo "error: --network is required" >&2; usage; }
+[ -f "$vmdk" ] || { echo "error: VMDK file '$vmdk' does not exist" >&2; exit 2; }
 
 import_args=(-ds "$ds")
 create_args=(-on=false -g "$guest" -firmware efi -disk.controller pvscsi -net "$net"
