@@ -12,6 +12,7 @@ survey="$1" base="$2"
 for f in "$survey" "$base"; do
   [ -r "$f" ] || { echo "error: cannot read: $f" >&2; exit 2; }
 done
+grep -q . "$base" || { echo "error: base packages file is empty: $base" >&2; exit 2; }
 
 awk '/^## /{s = ($0 == "## packages-all"); next} s && NF {print $1}' "$survey" | sort -u |
   comm -23 - <(sort -u "$base")

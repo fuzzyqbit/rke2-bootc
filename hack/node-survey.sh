@@ -9,12 +9,12 @@ R="${SURVEY_ROOT:-}"
 section() { printf '## %s\n' "$1"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# Print top-level YAML keys (name before the first ':') of the given files.
+# Print top-level YAML keys (name before the first ':', which must be followed by whitespace or end of line) of the given files.
 yaml_keys() {
   local f
   for f in "$@"; do
     [ -f "$f" ] || continue
-    sed -n 's/^\([A-Za-z0-9_.-][A-Za-z0-9_.-]*\):.*/\1/p' "$f" || true
+    sed -n 's/^\([A-Za-z0-9_.-][A-Za-z0-9_.-]*\):\([[:space:]].*\)\{0,1\}$/\1/p' "$f" || true
   done
 }
 
@@ -46,7 +46,7 @@ fi
 
 section packages-userinstalled
 if have dnf; then
-  dnf repoquery --userinstalled --qf '%{name}' 2>/dev/null || true
+  dnf -C repoquery --userinstalled --qf '%{name}\n' 2>/dev/null || true
 fi
 
 section enabled-units
@@ -57,7 +57,7 @@ fi
 section time-sync
 for f in "$R/etc/chrony.conf" "$R"/etc/chrony.d/*.conf; do
   [ -f "$f" ] || continue
-  grep -E '^(server|pool|sourcedir)([[:space:]]|$)' "$f" || true
+  grep -E '^[[:space:]]*(server|pool|sourcedir)([[:space:]]|$)' "$f" || true
 done
 
 section rke2-config-keys

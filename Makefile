@@ -81,4 +81,8 @@ template:
 
 survey-diff:
 	@test -n "$(SURVEY)" || { echo "error: SURVEY is required, e.g. make survey-diff SURVEY=survey.txt" >&2; exit 2; }
-	hack/survey-diff.sh "$(SURVEY)" <($(CONTAINER_TOOL) run --rm $(ROCKY_BASE_IMAGE) rpm -qa --qf '%{NAME}\n')
+	set -euo pipefail; \
+	base=$$($(CONTAINER_TOOL) run --rm $(ROCKY_BASE_IMAGE) rpm -qa --qf '%{NAME}\n') \
+	  || { echo "error: could not list base packages with $(CONTAINER_TOOL) run $(ROCKY_BASE_IMAGE)" >&2; exit 1; }; \
+	test -n "$$base" || { echo "error: base package list is empty" >&2; exit 1; }; \
+	hack/survey-diff.sh "$(SURVEY)" <(printf '%s\n' "$$base")
