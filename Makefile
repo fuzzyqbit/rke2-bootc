@@ -4,7 +4,7 @@ CONTAINER_TOOL ?= podman
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: venv test lint rocky-base rocky-base-push node push print-ref vmdk template
+.PHONY: venv test lint rocky-base rocky-base-push node push print-ref vmdk template survey-diff
 
 ENV ?= dev
 NEEDS_BUILD := $(filter node push print-ref vmdk,$(MAKECMDGOALS))
@@ -78,3 +78,7 @@ template:
 	@test -n "$(NETWORK)" || { echo "error: NETWORK is required" >&2; exit 2; }
 	disk/make-template.sh --vmdk "$(VMDK)" --name "$(NAME)" --datastore "$(DATASTORE)" \
 	  --network "$(NETWORK)" --guest-id "$(GUEST_ID)"
+
+survey-diff:
+	@test -n "$(SURVEY)" || { echo "error: SURVEY is required, e.g. make survey-diff SURVEY=survey.txt" >&2; exit 2; }
+	hack/survey-diff.sh "$(SURVEY)" <($(CONTAINER_TOOL) run --rm $(ROCKY_BASE_IMAGE) rpm -qa --qf '%{NAME}\n')
