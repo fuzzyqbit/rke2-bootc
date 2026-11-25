@@ -35,8 +35,15 @@ if [ -f "$R/etc/os-release" ]; then
 fi
 
 section rke2-version
+# Under sudo, /usr/local/bin (where the tarball install puts rke2) is often not on PATH.
+rke2_bin=""
 if have rke2; then
-  { rke2 --version 2>/dev/null || true; } | head -n 1 || true
+  rke2_bin=rke2
+elif [ -x "$R/usr/local/bin/rke2" ]; then
+  rke2_bin="$R/usr/local/bin/rke2"
+fi
+if [ -n "$rke2_bin" ]; then
+  { "$rke2_bin" --version 2>/dev/null || true; } | head -n 1 || true
 fi
 
 section packages-all
