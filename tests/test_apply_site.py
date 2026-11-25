@@ -57,13 +57,50 @@ def test_files_phase_copies_files_and_installs_nothing(fake_bin, tmp_path):
     assert (root / "etc/common.conf").read_text() == "c" and (root / "etc/env.conf").read_text() == "dev"
     assert calls(log) == []
 
-def test_packages_phase_installs_and_copies_nothing(fake_bin, tmp_path):
-    s = site(tmp_path); (s / "common/opt-in-image").write_text("")
-    r, log, root = go(fake_bin, tmp_path, s, phases=("packages",))
+def test_packages_phase_installs_then_copies_site_files_then_enables_units(fake_bin, tmp_path):
+    # Fake dnf records whether the site file was already in place when it ran.
+    env, log = fake_bin({"dnf": 'test -e "$SITE_TARGET_ROOT/etc/common.conf" && echo seen >> "$SEEN"; exit 0',
+                         "systemctl": 'test -e "$SITE_TARGET_ROOT/etc/common.conf" && echo unit >> "$SEEN"; exit 0',
+                         "update-ca-trust": ""})
+    root = make_root(tmp_path); env["SITE_TARGET_ROOT"] = str(root); env["SEEN"] = str(tmp_path / "seen")
+    r = run([S, str(site(tmp_path)), "dev", "packages"], env=env)
     assert r.returncode == 0
-    assert not (root / "etc/common.conf").exists() and (root / "opt").is_symlink()
+    assert (root / "etc/common.conf").read_text() == "c" and (root / "etc/env.conf").read_text() == "dev"
+    assert (tmp_path / "seen").read_text().split() == ["unit"]      # copied after dnf, before systemctl
     assert calls(log) == ["dnf -y install falcon-sensor audit", "dnf -y install devtool",
                           "systemctl enable auditd.service"]
+
+def test_site_file_wins_over_image_and_package_files(fake_bin, tmp_path):
+    s = site(tmp_path)
+    # A package that installs /etc/common.conf and replaces /etc/env.conf with a symlink.
+    env, log = fake_bin({"dnf": 'echo pkg > "$SITE_TARGET_ROOT/etc/common.conf"; '
+                                'ln -sfn common.conf "$SITE_TARGET_ROOT/etc/env.conf"',
+                         "systemctl": "", "update-ca-trust": ""})
+    root = make_root(tmp_path); env["SITE_TARGET_ROOT"] = str(root)
+    assert run([S, str(s), "dev", "files"], env=env).returncode == 0
+    (root / "etc/common.conf").write_text("from node/rootfs")       # the image's own COPY in between
+    assert run([S, str(s), "dev", "packages"], env=env).returncode == 0
+    assert (root / "etc/common.conf").read_text() == "c"
+    assert not (root / "etc/env.conf").is_symlink() and (root / "etc/env.conf").read_text() == "dev"
+
+def test_packages_phase_refreshes_ca_trust_again(fake_bin, tmp_path):
+    s = site(tmp_path); a = s / "common/rootfs/etc/pki/ca-trust/source/anchors"; a.mkdir(parents=True)
+    (a / "corp.crt").write_text("-----BEGIN CERTIFICATE-----")
+    _, log, root = go(fake_bin, tmp_path, s)
+    c = [l.strip() for l in calls(log)]
+    assert c == ["update-ca-trust", "dnf -y install falcon-sensor audit", "dnf -y install devtool",
+                 "update-ca-trust", "systemctl enable auditd.service"]
+    assert (root / "etc/pki/ca-trust/source/anchors/corp.crt").exists()
+
+def test_phases_are_idempotent(fake_bin, tmp_path):
+    s = site(tmp_path); (s / "common/opt-in-image").write_text("")
+    r, _, root = go(fake_bin, tmp_path, s, phases=("files", "files", "packages", "packages"))
+    assert r.returncode == 0
+    tmpfiles = (root / "usr/lib/tmpfiles.d/rke2-node-opt.conf").read_text()
+    assert tmpfiles.splitlines() == ["d /var/opt/cni 0755 root root -"]
+    assert (root / "opt").is_dir() and not (root / "opt").is_symlink()
+    assert (root / "opt/cni").is_symlink() and not (root / "var/opt/cni").exists()
+    assert (root / "etc/common.conf").read_text() == "c"
 
 @pytest.mark.parametrize("args", [["dev"], ["dev", "all"], ["dev", ""], ["dev", "files", "extra"]])
 def test_missing_or_unknown_phase_exits_2(fake_bin, tmp_path, args):

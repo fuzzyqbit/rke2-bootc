@@ -34,25 +34,21 @@ The node build (`node/Containerfile`) runs the script twice:
    files and CA certificates are in place for every `dnf` step of the build.
 2. **`packages` phase, after RKE2 and the image's own files**: secret check
    again, packages of `common` then the environment (one `dnf -y install` per
-   part), units of `common` then the environment (one `systemctl enable` per
-   part).
+   part), then `rootfs/` of `common` then the environment copied again, and
+   `update-ca-trust` again (only if a CA file was added), then units of
+   `common` then the environment (one `systemctl enable` per part).
 
 Files in the environment part overwrite files from `common`. Files named
 `.gitkeep` or `*.example` inside `rootfs/` are never copied.
 
-What follows from this order:
-
-- The image's own files (`node/rootfs/`: cloud-init, sudo, NetworkManager
-  settings) are copied after your files and win over a file at the same path.
-  To change one of those settings, add a drop-in with a later name (for
-  example `rootfs/etc/cloud/cloud.cfg.d/95-site.cfg`) instead of replacing the
-  file.
-- A file you ship at a path that a package installed later also ships: for a
-  package configuration file marked `noreplace` (most files under `/etc`,
-  for example `/etc/chrony.conf`) your file is kept and the package's version
-  is written next to it as `.rpmnew`; for any other file the package's version
-  wins. Check a package's configuration files with `rpm -qc <package>` on an
-  existing node.
+The site layer has the last word: because `rootfs/` is copied again after the
+image's own files (`node/rootfs/`: cloud-init, sudo, NetworkManager settings)
+and after your packages are installed, a file you ship replaces whatever the
+image or a package put at the same path. Replacing an image file means you
+now own its whole content; for a small change a drop-in with a later name
+(for example `rootfs/etc/cloud/cloud.cfg.d/95-site.cfg`) is usually easier to
+keep up to date. Unit files you ship are in place before units are enabled.
+Both phases can be run more than once with the same result.
 
 Copied files and directories are owned by root (ownership in your checkout
 is not kept), and group and other write permission is removed from them.

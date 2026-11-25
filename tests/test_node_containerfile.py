@@ -27,6 +27,10 @@ def test_order_of_layers():
                                "systemctl mask bootc-fetch-apply-updates.timer", "RUN bootc container lint")]
     assert i == sorted(i)
     assert CF.count("apply-site.sh") == 2
+    # The packages phase (which re-copies the site files, so they win) runs after the node rootfs COPY
+    # and before units are enabled and the image is cleaned up.
+    after = CF[CF.index('apply-site.sh /run/site "${SITE_ENV}" packages'):]
+    assert "COPY " not in after and "dnf -y install" not in after
 
 def test_no_self_update_and_no_rke2_enable():
     assert "mask bootc-fetch-apply-updates.timer" in CF

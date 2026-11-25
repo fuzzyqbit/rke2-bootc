@@ -47,6 +47,8 @@ def test_runbooks_state_the_rules_the_role_needs():
     assert "unless it still carries the update marker" in ops and "agent_batch` workers" in ops
     site = _doc("site/README.md")
     assert "sysusers.d" in site and "ROCKY_MIRROR" in site and "`*.key`" in site
+    assert "noreplace" not in site and "rpmnew" not in site
+    assert "The site layer has the last word" in site and "copied again" in site
 
 def test_readme_covers_template_and_build_host_details():
     text = _doc("README.md")

@@ -32,7 +32,7 @@ COPY node/rootfs/ /
 RUN chmod 0440 /etc/sudoers.d/10-wheel-nopasswd \
  && chmod 0755 /usr/sbin/rke2-node-generalize /usr/libexec/rke2-node/growroot
 
-# Site packages and units.
+# Site packages, then the site files again (they win over node/rootfs and package files), then units.
 RUN --mount=type=bind,from=ctx,source=/scripts,target=/run/build \
     --mount=type=bind,from=ctx,source=/site,target=/run/site \
     /run/build/apply-site.sh /run/site "${SITE_ENV}" packages
