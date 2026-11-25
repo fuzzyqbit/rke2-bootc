@@ -1,5 +1,7 @@
 # Move a running cluster to a new node image, one node at a time.
 # Usage: ansible-playbook -i <inventory> ansible/rolling-update.yml -e target_image=<registry/repo:tag>
+#   for example -e target_image=registry.example.com/platform/rke2-node-dev:v1.34.3-rke2r1.8
+#   (images are named rke2-node-dev and rke2-node-prod)
 #
 # Variables
 #   target_image        required, -e only. Image reference with an explicit tag (never latest).
@@ -10,8 +12,13 @@
 #   k8s_node_name       Kubernetes node name; default: lower-cased ansible nodename fact.
 #   kubectl             kubectl command line; default:
 #                       /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
-# drain_timeout, ready_timeout, k8s_node_name and kubectl may be set in inventory group_vars or
-# host_vars (or with -e). The playbook only reads them with defaults, so inventory values win.
+#   expected_rke2_version  RKE2 version every updated node's image must carry (form v1.34.3+rke2r1);
+#                       default: rke2_install_version from the inventory. After a node reboots into
+#                       target_image, the run stops unless the image's rke2_image fact equals it. With
+#                       neither variable set, the check is skipped. For an RKE2 upgrade, change
+#                       rke2_install_version in the inventory in the same change as the new image.
+# drain_timeout, ready_timeout, k8s_node_name, kubectl and expected_rke2_version may be set in
+# inventory group_vars or host_vars (or with -e). The playbook only reads them with defaults, so inventory values win.
 # kubectl and k8s_node_name are read from the node being updated, but the kubectl commands run on a
 # control-plane node.
 # update_marker is fixed (rke2-bootc.io/update-in-progress).
@@ -24,7 +31,7 @@
     - name: Require target_image
       ansible.builtin.assert:
         that: target_image is defined
-        fail_msg: "target_image is required, for example -e target_image=registry.example.com/platform/rke2-node:v1.34.3-rke2r1.7"
+        fail_msg: "target_image is required, for example -e target_image=registry.example.com/platform/rke2-node-dev:v1.34.3-rke2r1.7"
         quiet: true
 
     - name: Require an explicit, non-moving tag
@@ -87,6 +94,7 @@
     _node: "{{ k8s_node_name | default(ansible_facts.nodename | lower) }}"
     _drain_timeout: "{{ drain_timeout | default(600) }}"
     _ready_timeout: "{{ ready_timeout | default(600) }}"
+    _expected_rke2_version: "{{ expected_rke2_version | default(rke2_install_version | default('')) }}"
     needs_update: "{{ (bootc_status.stdout | from_json).status.booted.image.image.image != target_image }}"
   tasks:
     - name: Update node

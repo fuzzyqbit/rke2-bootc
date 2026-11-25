@@ -84,7 +84,7 @@
 # errors while the API comes back count as "not yet". Total time is about ready_timeout.
 - name: Wait for node Ready
   ansible.builtin.command: >-
-    {{ _kubectl }} get node {{ _node }}
+    {{ _kubectl }} get node {{ _node }} --request-timeout=10s
     -o jsonpath='{.status.nodeInfo.bootID}{" "}{.status.conditions[?(@.type=="Ready")].status}'
   delegate_to: "{{ kube_host }}"
   register: node_ready
@@ -108,11 +108,29 @@
   when: is_server | bool and (needs_update | bool or (node_marker.stdout | trim | length > 0))
 
 - name: Verify booted image
-  ansible.builtin.command: bootc status --format=json
-  register: bootc_after
-  changed_when: false
-  failed_when: (bootc_after.stdout | from_json).status.booted.image.image.image != target_image
   when: needs_update | bool or (node_marker.stdout | trim | length > 0)
+  block:
+    - name: Check booted image reference
+      ansible.builtin.command: bootc status --format=json
+      register: bootc_after
+      changed_when: false
+      failed_when: (bootc_after.stdout | from_json).status.booted.image.image.image != target_image
+
+    - name: Re-read image fact
+      ansible.builtin.setup:
+        gather_subset: local
+        filter: ansible_local
+
+    # Skipped when neither expected_rke2_version nor rke2_install_version is set.
+    - name: Check image RKE2 version
+      ansible.builtin.assert:
+        that: (ansible_local.rke2_image.rke2_version | default('')) == _expected_rke2_version
+        fail_msg: >-
+          {{ inventory_hostname }} booted {{ target_image }}, whose RKE2 version is
+          {{ ansible_local.rke2_image.rke2_version | default('unknown') }}, but the expected version is
+          {{ _expected_rke2_version }}. Make the inventory's rke2_install_version and the image agree.
+        quiet: true
+      when: _expected_rke2_version | length > 0
 
 - name: Uncordon and clear marker
   when: needs_update | bool or (node_marker.stdout | trim | length > 0)

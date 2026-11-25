@@ -70,3 +70,54 @@ def test_syntax_and_lint():
              "ansible/rolling-update.yml", "-e", "target_image=r.example.com/x:v1"], env=env)
     assert r.returncode == 0, r.stderr
     assert run([str(REPO / ".venv/bin/ansible-lint"), "ansible/"], env=env).returncode == 0
+
+ROLE_REPO_KEYS = {"name", "description", "baseurl", "gpgcheck", "gpgkey", "enabled"}
+
+def test_repo_dicts_have_every_key_the_role_reads():
+    # The inventory dicts replace the role defaults as a whole; roles/rke2/tasks/rpm_install.yml
+    # dereferences exactly these keys, so a missing one fails before the dnf task.
+    gv = load("inventory.example/group_vars/all.yml")
+    for name in ("rke2_common_yum_repo", "rke2_versioned_yum_repo"):
+        assert set(gv[name]) == ROLE_REPO_KEYS, name
+        assert gv[name]["enabled"] is True and gv[name]["gpgcheck"] is True
+
+def test_commented_mirror_alternative_is_complete_too():
+    text = (A / "inventory.example/group_vars/all.yml").read_text()
+    block = text.split("# Internal mirror alternative:\n", 1)[1]
+    alt = yaml.safe_load("\n".join(l[2:] for l in block.splitlines() if l.startswith("# ")))
+    for name in ("rke2_common_yum_repo", "rke2_versioned_yum_repo"):
+        assert set(alt[name]) == ROLE_REPO_KEYS, name
+
+def test_example_image_names_are_real():
+    text = (A / "rolling-update.yml").read_text()
+    assert "rke2-node:" not in text and "rke2-node-dev:" in text
+
+def _render(expr, **variables):
+    import jinja2
+    return jinja2.Environment().from_string(expr).render(**variables)
+
+def test_rke2_version_is_checked_after_the_reboot():
+    verify = next(t for t in load("tasks/update-node.yml") if t["name"] == "Verify booted image")
+    steps = verify["block"]
+    assert "bootc status" in steps[0]["ansible.builtin.command"] and "target_image" in steps[0]["failed_when"]
+    assert steps[1]["ansible.builtin.setup"]["filter"] == "ansible_local"
+    check = steps[2]["ansible.builtin.assert"]
+    assert "ansible_local.rke2_image.rke2_version" in check["that"] and "_expected_rke2_version" in check["that"]
+    assert "rke2_install_version" in check["fail_msg"] and "{{ _expected_rke2_version }}" in check["fail_msg"]
+    assert "ansible_local.rke2_image.rke2_version" in check["fail_msg"]
+    assert steps[2]["when"] == "_expected_rke2_version | length > 0"
+
+def test_rke2_version_check_is_skipped_when_no_version_is_set():
+    plays = load("rolling-update.yml")
+    expr = plays[1]["vars"]["_expected_rke2_version"]
+    assert plays[2]["vars"]["_expected_rke2_version"] == expr
+    for name in ("expected_rke2_version", "rke2_install_version"):
+        assert name not in plays[1]["vars"]          # inventory values must not be outranked
+    assert _render(expr) == ""                                                   # check skipped
+    assert _render(expr, rke2_install_version="v1.34.3+rke2r1") == "v1.34.3+rke2r1"
+    assert _render(expr, rke2_install_version="v1.34.3+rke2r1",
+                   expected_rke2_version="v1.35.0+rke2r1") == "v1.35.0+rke2r1"
+
+def test_ready_poll_has_a_request_timeout():
+    task = next(t for t in load("tasks/update-node.yml") if t["name"] == "Wait for node Ready")
+    assert "--request-timeout=10s" in task["ansible.builtin.command"]
