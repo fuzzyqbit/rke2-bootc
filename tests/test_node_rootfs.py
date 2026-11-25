@@ -11,8 +11,12 @@ def test_cloud_init_config():
 
 def test_networkmanager_ignores_cni_interfaces():
     text = (R / "usr/lib/NetworkManager/conf.d/90-rke2-cni.conf").read_text()
-    for name in ("cali*", "flannel*", "cilium*", "vxlan.calico"):
-        assert f"interface-name:{name}" in text
+    # A device section: the role writes [keyfile] unmanaged-devices under /etc, which would override ours.
+    assert "[device-rke2-cni]" in text and "[keyfile]" not in text and "unmanaged-devices" not in text
+    match = next(l for l in text.splitlines() if l.startswith("match-device="))
+    for name in ("cali*", "flannel*", "vxlan.calico", "vxlan-v6.calico", "tunl*", "cilium*", "lxc*"):
+        assert f"interface-name:{name}" in match
+    assert "managed=0" in text.splitlines()
 
 def test_etcd_user_and_sudo_and_tmpfiles():
     assert (R / "usr/lib/sysusers.d/rke2-etcd.conf").read_text().startswith("u etcd ")

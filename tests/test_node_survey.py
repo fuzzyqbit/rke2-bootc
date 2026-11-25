@@ -1,5 +1,5 @@
 # tests/test_node_survey.py
-from conftest import REPO, run
+from conftest import REPO, run, calls, versions
 S, D = str(REPO / "hack/node-survey.sh"), str(REPO / "hack/survey-diff.sh")
 SECRET = "K10deadbeef::server:s3cr3t-join-token"
 
@@ -80,3 +80,12 @@ def test_userinstalled_uses_cache_only_one_per_line(fake_bin, tmp_path):
     run([S], env=env)
     line = [l for l in log.read_text().splitlines() if l.startswith("dnf")][0]
     assert " -C " in line and "%{name}\\n" in line
+
+def test_make_survey_diff_base_image_can_be_overridden(fake_bin, tmp_path):
+    report = tmp_path / "s.txt"; report.write_text("## packages-all\nbash\nfalcon-sensor\n")
+    env, log = fake_bin({"podman": "echo bash"}); env["CONTAINER_TOOL"] = "podman"
+    r = run(["make", "-s", "survey-diff", f"SURVEY={report}"], env=env)
+    assert r.returncode == 0
+    assert calls(log)[0].startswith(f"podman run --rm {versions()['ROCKY_BASE_IMAGE']} ")
+    r = run(["make", "-s", "survey-diff", f"SURVEY={report}", "BASE_IMAGE=rhel.example.com/rhel-bootc:9"], env=env)
+    assert r.returncode == 0 and calls(log)[1].startswith("podman run --rm rhel.example.com/rhel-bootc:9 ")

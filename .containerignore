@@ -1,0 +1,7 @@
+.git
+.venv
+.superpowers
+output
+tests
+docs
+*.vmdk

@@ -4,3 +4,4 @@ disk/config.toml
 __pycache__/
 .pytest_cache/
 *.vmdk
+.ansible/

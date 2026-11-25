@@ -50,14 +50,16 @@ lint: venv
 	fi
 
 rocky-base:
-	$(CONTAINER_TOOL) build -f base/rocky/Containerfile -t $(ROCKY_BASE_IMAGE) \
+	$(CONTAINER_TOOL) build --no-cache --pull=newer \
+	  --cap-add=all --security-opt=label=type:container_runtime_t --device /dev/fuse \
+	  -f base/rocky/Containerfile -t $(ROCKY_BASE_IMAGE) \
 	  --build-arg ROCKY_MIRROR=$(ROCKY_MIRROR) --build-arg EL_MAJOR=$(EL_MAJOR) .
 
 rocky-base-push:
 	$(CONTAINER_TOOL) push $(ROCKY_BASE_IMAGE)
 
 node:
-	$(CONTAINER_TOOL) build -f node/Containerfile -t $(NODE_REF) \
+	$(CONTAINER_TOOL) build --pull=newer -f node/Containerfile -t $(NODE_REF) \
 	  --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg RKE2_VERSION=$(RKE2_VERSION) \
 	  --build-arg SITE_ENV=$(ENV) --build-arg RANCHER_RPM_BASEURL=$(RANCHER_RPM_BASEURL) \
 	  --build-arg RKE2_CHANNEL=$(RKE2_CHANNEL) --build-arg EL_MAJOR=$(EL_MAJOR) .
@@ -80,10 +82,13 @@ template:
 	disk/make-template.sh --vmdk "$(VMDK)" --name "$(NAME)" --datastore "$(DATASTORE)" \
 	  --network "$(NETWORK)" --guest-id "$(GUEST_ID)"
 
+# survey-diff compares with the Rocky base unless told otherwise; for a RHEL
+# cluster pass BASE_IMAGE=$(RHEL_BASE_IMAGE).
+BASE_IMAGE ?= $(ROCKY_BASE_IMAGE)
 survey-diff:
 	@test -n "$(SURVEY)" || { echo "error: SURVEY is required, e.g. make survey-diff SURVEY=survey.txt" >&2; exit 2; }
 	set -euo pipefail; \
-	base=$$($(CONTAINER_TOOL) run --rm $(ROCKY_BASE_IMAGE) rpm -qa --qf '%{NAME}\n') \
-	  || { echo "error: could not list base packages with $(CONTAINER_TOOL) run $(ROCKY_BASE_IMAGE)" >&2; exit 1; }; \
+	base=$$($(CONTAINER_TOOL) run --rm $(BASE_IMAGE) rpm -qa --qf '%{NAME}\n') \
+	  || { echo "error: could not list base packages with $(CONTAINER_TOOL) run $(BASE_IMAGE)" >&2; exit 1; }; \
 	test -n "$$base" || { echo "error: base package list is empty" >&2; exit 1; }; \
 	hack/survey-diff.sh "$(SURVEY)" <(printf '%s\n' "$$base")

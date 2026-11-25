@@ -4,8 +4,12 @@ S = str(REPO / "node/rootfs/usr/sbin/rke2-node-generalize")
 
 def tree(tmp_path):
     root = tmp_path / "root"
-    for d in ("etc/ssh", "var/lib/dbus", "etc/NetworkManager/system-connections", "var/lib/rancher/rke2"):
+    for d in ("etc/ssh", "var/lib/dbus", "etc/NetworkManager/system-connections", "var/lib/rancher/rke2",
+              "etc/sysconfig/network-scripts"):
         (root / d).mkdir(parents=True)
+    (root / "etc/hostname").write_text("booted-once\n")
+    (root / "etc/sysconfig/network-scripts/ifcfg-ens192").write_text("DEVICE=ens192\n")
+    (root / "etc/sysconfig/network-scripts/readme-ifcfg-rh.txt").write_text("keep")
     (root / "etc/machine-id").write_text("abc123\n")
     (root / "etc/ssh/ssh_host_ed25519_key").write_text("k")
     (root / "etc/ssh/sshd_config").write_text("keep")
@@ -19,6 +23,9 @@ def test_resets_identity_and_powers_off(fake_bin, tmp_path):
     assert (root / "etc/machine-id").read_text() == ""
     assert not list((root / "etc/ssh").glob("ssh_host_*")) and (root / "etc/ssh/sshd_config").exists()
     assert not list((root / "etc/NetworkManager/system-connections").iterdir())
+    assert not (root / "etc/hostname").exists()
+    assert not list((root / "etc/sysconfig/network-scripts").glob("ifcfg-*"))
+    assert (root / "etc/sysconfig/network-scripts/readme-ifcfg-rh.txt").exists()
     c = calls(log)
     assert c[0] == "cloud-init clean --logs" and c[-1] == "systemctl poweroff"
 

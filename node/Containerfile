@@ -1,4 +1,12 @@
 ARG BASE_IMAGE
+
+# Build context stage: the RUN steps below mount scripts and the site layer from
+# here instead of from the build context, which older podman with SELinux
+# enforcing can refuse ("Permission denied").
+FROM scratch AS ctx
+COPY node/scripts /scripts
+COPY site /site
+
 FROM ${BASE_IMAGE}
 ARG RKE2_VERSION
 ARG SITE_ENV
@@ -10,7 +18,7 @@ RUN dnf -y install open-vm-tools cloud-init cloud-utils-growpart chrony sudo \
       python3 python3-libselinux python3-dnf \
  && (dnf -y remove firewalld || true)
 
-RUN --mount=type=bind,source=node/scripts,target=/run/build \
+RUN --mount=type=bind,from=ctx,source=/scripts,target=/run/build \
     RKE2_VERSION="${RKE2_VERSION}" SITE_ENV="${SITE_ENV}" RANCHER_RPM_BASEURL="${RANCHER_RPM_BASEURL}" \
     RKE2_CHANNEL="${RKE2_CHANNEL}" EL_MAJOR="${EL_MAJOR}" /run/build/install-rke2.sh
 
@@ -18,8 +26,8 @@ COPY node/rootfs/ /
 RUN chmod 0440 /etc/sudoers.d/10-wheel-nopasswd \
  && chmod 0755 /usr/sbin/rke2-node-generalize /usr/libexec/rke2-node/growroot
 
-RUN --mount=type=bind,source=node/scripts,target=/run/build \
-    --mount=type=bind,source=site,target=/run/site \
+RUN --mount=type=bind,from=ctx,source=/scripts,target=/run/build \
+    --mount=type=bind,from=ctx,source=/site,target=/run/site \
     /run/build/apply-site.sh /run/site "${SITE_ENV}"
 
 RUN systemctl enable vmtoolsd.service sshd.service chronyd.service rke2-node-growroot.service \
@@ -28,4 +36,9 @@ RUN systemctl enable vmtoolsd.service sshd.service chronyd.service rke2-node-gro
  && systemctl mask bootc-fetch-apply-updates.timer bootc-generic-growpart.service
 
 RUN dnf clean all && rm -rf /var/cache/* /var/log/* /var/lib/dnf
+
+# Clones must not share an identity: the image carries no machine ID and no SSH host keys.
+RUN { test ! -s /etc/machine-id || { echo "error: image has a machine ID" >&2; exit 1; }; } \
+ && for f in /etc/ssh/ssh_host_*; do \
+      if test -e "$f"; then echo "error: image has an SSH host key: $f" >&2; exit 1; fi; done
 RUN bootc container lint

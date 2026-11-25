@@ -16,6 +16,15 @@ def calls(log):
     return log.read_text().splitlines() if log.exists() else []
 
 
+def versions():
+    """versions.env as a dict, so tests follow the owner's edits instead of the shipped placeholders."""
+    return dict(line.split("=", 1) for line in (REPO / "versions.env").read_text().split())
+
+
+def rke2_tag(version):
+    return run([str(REPO / "node/scripts/rke2-version.sh"), "tag", version]).stdout.strip()
+
+
 @pytest.fixture
 def fake_bin(tmp_path):
     """Factory: create fake executables that log their calls, then run a shell body."""

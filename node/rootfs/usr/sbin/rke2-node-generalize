@@ -30,6 +30,8 @@ cloud-init clean --logs
 
 : > "$ROOT/etc/machine-id"
 rm -f "$ROOT/var/lib/dbus/machine-id" \
+      "$ROOT/etc/hostname" \
+      "$ROOT"/etc/sysconfig/network-scripts/ifcfg-* \
       "$ROOT"/etc/ssh/ssh_host_* \
       "$ROOT/var/lib/systemd/random-seed" \
       "$ROOT"/etc/NetworkManager/system-connections/* \

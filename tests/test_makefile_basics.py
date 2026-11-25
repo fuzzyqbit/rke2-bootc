@@ -20,3 +20,9 @@ def test_lint_fails_when_shellcheck_fails():
 def test_versions_env_rke2_version_is_valid():
     env = dict(l.split("=", 1) for l in (REPO / "versions.env").read_text().split())
     assert run([str(REPO / "node/scripts/rke2-version.sh"), "rpm", env["RKE2_VERSION"]]).returncode == 0
+
+
+def test_ansible_tools_are_pinned_to_the_tested_versions():
+    reqs = (REPO / "requirements-dev.txt").read_text().split()
+    assert any(r.startswith("ansible-core==") for r in reqs)
+    assert any(r.startswith("ansible-lint==") for r in reqs)
