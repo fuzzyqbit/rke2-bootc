@@ -4,7 +4,7 @@ CONTAINER_TOOL ?= podman
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: venv test lint rocky-base rocky-base-push node push print-ref
+.PHONY: venv test lint rocky-base rocky-base-push node push print-ref vmdk template
 
 ENV ?= dev
 NEEDS_BUILD := $(filter node push print-ref vmdk,$(MAKECMDGOALS))
@@ -66,3 +66,15 @@ push:
 
 print-ref:
 	@echo $(NODE_REF)
+
+vmdk:
+	disk/build-vmdk.sh $(NODE_REF) disk/config.toml output/$(ENV)
+
+GUEST_ID ?= rhel9_64Guest
+template:
+	@test -n "$(VMDK)" || { echo "error: VMDK is required" >&2; exit 2; }
+	@test -n "$(NAME)" || { echo "error: NAME is required" >&2; exit 2; }
+	@test -n "$(DATASTORE)" || { echo "error: DATASTORE is required" >&2; exit 2; }
+	@test -n "$(NETWORK)" || { echo "error: NETWORK is required" >&2; exit 2; }
+	disk/make-template.sh --vmdk "$(VMDK)" --name "$(NAME)" --datastore "$(DATASTORE)" \
+	  --network "$(NETWORK)" --guest-id "$(GUEST_ID)"

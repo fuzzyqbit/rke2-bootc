@@ -1,0 +1,8 @@
+[[customizations.user]]
+name = "ansible"
+key = "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY ansible"
+groups = ["wheel"]
+
+[[customizations.filesystem]]
+mountpoint = "/"
+minsize = "60 GiB"
